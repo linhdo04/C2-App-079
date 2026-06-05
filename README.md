@@ -1,3 +1,23 @@
+# Team 079 — Autonomous drones
+
+## Mô tả
+...
+
+## Thành viên
+- Name — Agent logic
+- Name — API & Backend
+- Name — Frontend & Testing
+
+## Quick Start
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+pre-commit install
+cp .env.example .env
+make run
+```
+
 # Starter Code Template — Cohort 2
 
 Empty starter template for AI20K Build Cohort 2 team repositories. Includes pre-configured AI usage logging hooks for Claude Code, Cursor, Codex, Gemini CLI, Antigravity, and GitHub Copilot.
