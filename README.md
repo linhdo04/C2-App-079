@@ -9,13 +9,24 @@
 - Name — Frontend & Testing
 
 ## Quick Start
+
+### For Backend
 ```bash
+cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 pre-commit install
 cp .env.example .env
 make run
+```
+
+### For Frontend
+```bash
+cd frontend
+pnpm install
+cp .env.example .env
+pnpm dev
 ```
 
 # Starter Code Template — Cohort 2
