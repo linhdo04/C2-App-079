@@ -10,7 +10,7 @@ repos:
 
       - id: frontend-lint
         name: frontend lint
-        entry: bash -c "cd frontend && pnpm lint && pnpm format"
+        entry: bash -c "cd frontend && bun lint && bun format"
         language: system
         pass_filenames: false
         files: ^frontend/

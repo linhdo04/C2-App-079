@@ -7,6 +7,7 @@ from core import settings, setup_logging
 from infrastructure import close_db, close_redis, init_db, init_redis
 
 from .middlewares import error_handling, logging, rate_limiting
+from .routes import agent_router
 
 
 @asynccontextmanager
@@ -30,6 +31,8 @@ app.add_middleware(
     key_window=60,
 )
 app.add_middleware(error_handling.ErrorHandlingMiddleware, debug=settings.app_debug)
+
+app.include_router(agent_router)
 
 
 @app.get("/")

@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 import structlog
 from sqlalchemy.ext.asyncio import (
@@ -49,6 +50,20 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
     if _session_factory is None:
         raise RuntimeError("Database chưa được khởi tạo. Gọi init_db() trước.")
 
+    async with _session_factory() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+
+@asynccontextmanager
+async def db_session() -> AsyncGenerator[AsyncSession, None]:
+    """Dùng ngoài FastAPI — cho tools, background tasks, scripts."""
+    if _session_factory is None:
+        raise RuntimeError("Database chưa được khởi tạo.")
     async with _session_factory() as session:
         try:
             yield session

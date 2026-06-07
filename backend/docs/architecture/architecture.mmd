@@ -1,0 +1,45 @@
+%% Mermaid architecture diagram for backend
+flowchart LR
+  subgraph APP[FastAPI Application]
+    A[FastAPI app]
+    M[Middlewares\n(logging, rate-limiting, error-handling)]
+    R[Routes\n(/, /agent/ask)]
+  end
+
+  subgraph LIFESPAN[Startup / Shutdown]
+    I[init_db(), init_redis()]
+  end
+
+  subgraph DATA[Datastores]
+    PG[(Postgres)]
+    RD[(Redis)]
+  end
+
+  subgraph AGENT[Agent Layer]
+    AG[LangChain Agent (graph)]
+    TO[Tools: web_search, query_crop_database, get_weather_forecast]
+  end
+
+  A --> R
+  A --> M
+  A --> I
+  I --> PG
+  I --> RD
+  R --> AG
+  AG --> TO
+  AG --> PG
+  R --> PG
+  M --> RD
+
+  classDef infra fill:#f9f,stroke:#333,stroke-width:1px;
+  class PG,RD infra
+
+  %% Request flow: client -> FastAPI -> Router -> agent.run -> tools/datastores -> response
+  subgraph FLOW[Request Flow]
+    C[Client]
+    C -->|POST /agent/ask| A
+    A -->|router| AG
+    AG -->|calls| TO
+    AG -->|reads/writes| PG
+    TO -->|may call| web[External web]
+  end
