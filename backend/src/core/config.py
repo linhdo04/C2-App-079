@@ -11,6 +11,9 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    gemini_api_key: str = Field(alias="GEMINI_API_KEY")
+    tavily_api_key: str = Field(alias="TAVILY_API_KEY")
+
     app_name: str = Field(alias="APP_NAME")
     app_env: Literal["development", "production", "testing"] = Field(
         alias="APP_ENV", default="production"
