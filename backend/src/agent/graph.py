@@ -5,9 +5,9 @@ from typing import Any
 from langgraph.graph import END, StateGraph
 
 from .nodes import (
-    get_weather_forecast_node,
-    query_crop_database_node,
-    web_search_node,
+    execute_tools_node,
+    route_intent_node,
+    synthesize_answer_node,
 )
 from .state import AgentState
 
@@ -17,15 +17,15 @@ def create_graph() -> Any:
     workflow: StateGraph[AgentState] = StateGraph(AgentState)
 
     # Định nghĩa các nodes
-    workflow.add_node("search", web_search_node)
-    workflow.add_node("database", query_crop_database_node)
-    workflow.add_node("weather", get_weather_forecast_node)
+    workflow.add_node("route_intent", route_intent_node)
+    workflow.add_node("execute_tools", execute_tools_node)
+    workflow.add_node("synthesize_answer", synthesize_answer_node)
 
     # Định nghĩa edges
-    workflow.set_entry_point("database")
-    workflow.add_edge("database", "search")
-    workflow.add_edge("search", "weather")
-    workflow.add_edge("weather", END)
+    workflow.set_entry_point("route_intent")
+    workflow.add_edge("route_intent", "execute_tools")
+    workflow.add_edge("execute_tools", "synthesize_answer")
+    workflow.add_edge("synthesize_answer", END)
 
     return workflow.compile()
 
