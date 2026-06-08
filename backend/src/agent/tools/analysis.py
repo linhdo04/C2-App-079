@@ -2,7 +2,10 @@
 
 from typing import Any
 
+from langchain_core.tools import tool
 
+
+@tool
 async def analyze_crop_data(data: dict[str, Any]) -> str:
     """Phân tích dữ liệu mùa vụ và đưa ra khuyến nghị.
 

@@ -4,19 +4,18 @@ import logging
 from typing import Any
 
 from langchain_core.messages import HumanMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
-
-from core.config import settings
 
 from .graph import graph
-from .tools import get_weather_forecast, query_crop_database, web_search
+from .tools import (
+    analyze_crop_data,
+    get_weather_forecast,
+    query_crop_database,
+    web_search,
+)
 
 logger = logging.getLogger(__name__)
 
-# Initialize LLM
-llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", api_key=settings.gemini_api_key)
-
-tools = [web_search, query_crop_database, get_weather_forecast]
+tools = [web_search, query_crop_database, get_weather_forecast, analyze_crop_data]
 
 
 async def run_agent(question: str) -> str:
@@ -29,13 +28,20 @@ async def run_agent(question: str) -> str:
         Câu trả lời từ agent
     """
     try:
-        # Tạo initial state với message từ user
-        initial_state: dict[str, Any] = {"messages": [HumanMessage(content=question)]}
+        # Tạo initial state với question gốc và message từ user
+        initial_state: dict[str, Any] = {
+            "question": question,
+            "messages": [HumanMessage(content=question)],
+        }
 
         # Invoke graph với state
         result = await graph.ainvoke(initial_state)
 
-        # Lấy message cuối cùng từ kết quả
+        answer = result.get("answer")
+        if answer:
+            return str(answer)
+
+        # Fallback cho state cũ hoặc graph không tạo answer
         messages = result.get("messages", [])
         if messages:
             last_message = messages[-1]
