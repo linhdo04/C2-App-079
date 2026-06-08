@@ -7,7 +7,13 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from agent import run_agent
 from agent.graph import graph
-from agent.nodes import execute_tools_node, route_intent_node, synthesize_answer_node
+from agent.nodes import (
+    _extract_crop_data,
+    _search_runner,
+    execute_tools_node,
+    route_intent_node,
+    synthesize_answer_node,
+)
 
 
 class FakeLLM:
@@ -39,6 +45,92 @@ async def test_route_intent_detects_analysis() -> None:
     )
 
     assert result["intents"] == ["analysis", "search"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("question", "expected_intents"),
+    [
+        ("Trời nóng ở Hà Nội có ảnh hưởng cây lúa không?", ["weather", "search"]),
+        ("Giá cả nông sản hôm nay thế nào?", ["search"]),
+        ("Ước tính thu hoạch với năng suất 5 tấn/ha", ["analysis"]),
+    ],
+)
+async def test_route_intent_detects_common_synonyms(
+    question: str,
+    expected_intents: list[str],
+) -> None:
+    result = await route_intent_node(
+        {
+            "question": question,
+            "messages": [HumanMessage(content=question)],
+        }
+    )
+
+    assert result["intents"] == expected_intents
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_area", "expected_yield"),
+    [
+        ("Phân tích lúa với 10 ha và 6 tấn/ha", 10.0, 6.0),
+        ("Phân tích lúa với ha 10 và năng suất 6", 10.0, 6.0),
+        ("Phân tích lúa với 2,5 ha và năng suất 4,2", 2.5, 4.2),
+        ("Phân tích lúa chưa có số liệu rõ ràng", 0.0, 0.0),
+    ],
+)
+def test_extract_crop_data_supports_common_number_formats(
+    question: str,
+    expected_area: float,
+    expected_yield: float,
+) -> None:
+    result = _extract_crop_data(question)
+
+    assert result["area"] == expected_area
+    assert result["yield_per_ha"] == expected_yield
+
+
+@pytest.mark.asyncio
+async def test_search_runner_falls_back_when_ainvoke_is_not_supported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeSearchTool:
+        async def ainvoke(self, tool_input: dict[str, Any]) -> str:
+            raise NotImplementedError
+
+        def invoke(self, tool_input: dict[str, Any]) -> str:
+            return f"sync result for {tool_input['query']}"
+
+    monkeypatch.setattr("agent.nodes.web_search", FakeSearchTool())
+
+    result = await _search_runner("giá lúa")
+
+    assert result == "sync result for giá lúa"
+
+
+@pytest.mark.asyncio
+async def test_search_runtime_error_is_recorded_as_tool_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingSearchTool:
+        async def ainvoke(self, tool_input: dict[str, Any]) -> str:
+            raise RuntimeError("tavily unavailable")
+
+        def invoke(self, tool_input: dict[str, Any]) -> str:
+            return "should not fallback"
+
+    monkeypatch.setattr("agent.nodes.web_search", FailingSearchTool())
+
+    result = await execute_tools_node(
+        {
+            "question": "Giá lúa hôm nay",
+            "intents": ["search"],
+            "messages": [HumanMessage(content="Giá lúa hôm nay")],
+        }
+    )
+
+    assert result["tool_results"] == {}
+    assert result["tool_errors"] == {"search": "tavily unavailable"}
 
 
 @pytest.mark.asyncio

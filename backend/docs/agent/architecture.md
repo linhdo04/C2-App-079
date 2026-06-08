@@ -62,9 +62,9 @@ END
 | Intent | Khi dùng |
 | --- | --- |
 | `database` | Câu hỏi về user/người dùng/email/tên/dữ liệu nội bộ |
-| `weather` | Câu hỏi về thời tiết, dự báo, mưa, nhiệt độ |
-| `analysis` | Câu hỏi có diện tích, năng suất hoặc sản lượng |
-| `search` | Câu hỏi về giá, thị trường, kỹ thuật, sâu bệnh, cây trồng |
+| `weather` | Câu hỏi về thời tiết, dự báo, mưa, nhiệt độ, nóng/lạnh, khô hạn, bão |
+| `analysis` | Câu hỏi có diện tích, năng suất, sản lượng, ước tính hoặc thu hoạch |
+| `search` | Câu hỏi về giá, thị trường, kỹ thuật, sâu bệnh, phân bón, giống, nông sản |
 | `general` | Câu hỏi không khớp tool cụ thể |
 
 `execute_tools` chạy các tool khớp intent và lưu kết quả vào `tool_results`.
