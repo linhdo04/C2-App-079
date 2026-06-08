@@ -25,12 +25,13 @@ async def query_crop_database(query: str) -> str:
     ):
         async with db_session() as session:
             result = await session.execute(select(UserModel).limit(100))
-            users = result.all()
+            users = result.scalars().all()
             if not users:
                 return "Không tìm thấy bản ghi người dùng trong hệ thống."
 
-            lines = [f"- id={u.id}, name={u.name}, email={u.email}" for u in users]
-            return "Danh sách người dùng:\n" + "\n".join(lines)
+            # Chỉ trả về thông tin cơ bản, không expose PII như email
+            lines = [f"- id={u.id}, name={u.name}" for u in users]
+            return f"Có {len(users)} người dùng trong hệ thống:\n" + "\n".join(lines)
 
     # Fallback: trả schema sẵn có để LLM biết dữ liệu nội bộ
     return "Chưa có dữ liệu mùa vụ trong schema này."
