@@ -57,7 +57,8 @@ synthesize_answer
 END
 ```
 
-`route_intent` dùng keyword heuristic để chọn intent:
+`route_intent` dùng keyword heuristic để chọn intent. Keyword được match theo
+ranh giới token để tránh route nhầm do substring ngắn.
 
 | Intent | Khi dùng |
 | --- | --- |

@@ -64,7 +64,8 @@ tổng sản lượng = diện tích * năng suất trên mỗi hecta
 Khuyến nghị hiện dựa trên ngưỡng năng suất `> 5` tấn/ha. Tool được route khi
 câu hỏi chứa tín hiệu về diện tích, năng suất hoặc sản lượng. Parser input hiện
 chỉ trích xuất số liệu đơn giản từ câu hỏi, hỗ trợ các dạng như `10 ha`,
-`ha 10`, `6 tấn/ha`, `năng suất 6` và số thập phân dùng dấu phẩy.
+`ha 10`, `6 tấn/ha`, `năng suất 6` và số thập phân dùng dấu phẩy. Keyword số
+liệu cũng được match theo ranh giới token để tránh bắt nhầm substring.
 
 ## Thêm hoặc thay đổi tool
 

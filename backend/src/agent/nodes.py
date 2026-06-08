@@ -25,7 +25,17 @@ from .tools import (
 
 ToolRunner = Callable[[str], Awaitable[str]]
 
-DATABASE_KEYWORDS = ("user", "users", "người dùng", "người-dùng", "email", "tên")
+DATABASE_KEYWORDS = (
+    "user",
+    "users",
+    "người dùng",
+    "người-dùng",
+    "email",
+    "họ tên",
+    "tên người dùng",
+    "tên user",
+    "name",
+)
 WEATHER_KEYWORDS = (
     "thời tiết",
     "dự báo",
@@ -54,7 +64,6 @@ ANALYSIS_KEYWORDS = (
     "sản xuất",
 )
 SEARCH_KEYWORDS = (
-    "giá",
     "giá cả",
     "thị trường",
     "kỹ thuật",
@@ -75,6 +84,7 @@ SEARCH_KEYWORDS = (
 AREA_KEYWORDS = ("ha", "hecta", "hectare")
 YIELD_KEYWORDS = ("tấn/ha", "tấn trên ha", "tan/ha", "năng suất")
 NUMBER_PATTERN = r"(\d+(?:\.\d+)?)"
+KEYWORD_BOUNDARY = r"(?<![\w-]){keyword}(?![\w-])"
 
 
 def _question_from_state(state: AgentState) -> str:
@@ -92,8 +102,12 @@ def _normalize_text(text: str) -> str:
     return " ".join(text.lower().replace(",", ".").split())
 
 
+def _keyword_pattern(keyword: str) -> str:
+    return KEYWORD_BOUNDARY.format(keyword=re.escape(keyword))
+
+
 def _has_keyword(text: str, keywords: tuple[str, ...]) -> bool:
-    return any(keyword in text for keyword in keywords)
+    return any(re.search(_keyword_pattern(keyword), text) for keyword in keywords)
 
 
 def _route_intents(question: str) -> list[str]:
@@ -149,14 +163,13 @@ def _extract_crop_data(question: str) -> dict[str, Any]:
 def _extract_number_near_keywords(text: str, keywords: tuple[str, ...]) -> float:
     normalized = _normalize_text(text)
     for keyword in keywords:
-        escaped_keyword = re.escape(keyword)
-        match = re.search(rf"{NUMBER_PATTERN}\s*{escaped_keyword}", normalized)
+        match = re.search(
+            rf"(?:{NUMBER_PATTERN}\s*{_keyword_pattern(keyword)})"
+            rf"|(?:{_keyword_pattern(keyword)}\s*{NUMBER_PATTERN})",
+            normalized,
+        )
         if match:
-            return float(match.group(1))
-
-        match = re.search(rf"{escaped_keyword}\s*{NUMBER_PATTERN}", normalized)
-        if match:
-            return float(match.group(1))
+            return float(next(group for group in match.groups() if group is not None))
     return 0.0
 
 
