@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlmodel import SQLModel
 
 from core import settings
 
@@ -34,9 +33,6 @@ async def init_db() -> None:
         autoflush=False,
     )
 
-    async with _engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
-
     _logger.info("database_connected", pool_size=10, max_overflow=20)
 
 
@@ -51,12 +47,7 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         raise RuntimeError("Database chưa được khởi tạo. Gọi init_db() trước.")
 
     async with _session_factory() as session:
-        try:
-            yield session
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
+        yield session
 
 
 @asynccontextmanager

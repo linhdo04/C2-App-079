@@ -8,9 +8,9 @@ repos:
         pass_filenames: false
         files: ^backend/
 
-      - id: frontend-lint
-        name: frontend lint
-        entry: bash -c "cd frontend && bun lint && bun format"
+      - id: frontend-check
+        name: frontend check
+        entry: bash -c "cd frontend && bun lint:check && bun format:check"
         language: system
         pass_filenames: false
         files: ^frontend/

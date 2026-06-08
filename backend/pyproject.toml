@@ -38,7 +38,7 @@ Repository = "https://github.com/AI20K-Build-Cohort-2/C2-App-079"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["api*"]
+include = ["*"]
 
 [tool.ruff]
 line-length = 88
