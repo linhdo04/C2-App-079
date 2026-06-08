@@ -9,6 +9,7 @@ from agent import run_agent
 from agent.graph import graph
 from agent.nodes import (
     _extract_crop_data,
+    _extract_number_near_keywords,
     _search_runner,
     execute_tools_node,
     route_intent_node,
@@ -70,6 +71,39 @@ async def test_route_intent_detects_common_synonyms(
     assert result["intents"] == expected_intents
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Tên lửa có dùng trong nông nghiệp không?",
+        "Đánh giá chung về câu trả lời này",
+    ],
+)
+async def test_route_intent_avoids_keyword_collisions(question: str) -> None:
+    result = await route_intent_node(
+        {
+            "question": question,
+            "messages": [HumanMessage(content=question)],
+        }
+    )
+
+    assert result["intents"] == ["general"]
+
+
+@pytest.mark.asyncio
+async def test_route_intent_detects_specific_database_name_phrase() -> None:
+    question = "Cho tôi họ tên người dùng trong hệ thống"
+
+    result = await route_intent_node(
+        {
+            "question": question,
+            "messages": [HumanMessage(content=question)],
+        }
+    )
+
+    assert result["intents"] == ["database"]
+
+
 @pytest.mark.parametrize(
     ("question", "expected_area", "expected_yield"),
     [
@@ -88,6 +122,23 @@ def test_extract_crop_data_supports_common_number_formats(
 
     assert result["area"] == expected_area
     assert result["yield_per_ha"] == expected_yield
+
+
+@pytest.mark.parametrize(
+    ("text", "keywords", "expected"),
+    [
+        ("10 ha", ("ha",), 10.0),
+        ("ha 10", ("ha",), 10.0),
+        ("năng suất 4.2", ("năng suất",), 4.2),
+        ("4.2 năng suất", ("năng suất",), 4.2),
+    ],
+)
+def test_extract_number_near_keywords_checks_both_directions(
+    text: str,
+    keywords: tuple[str, ...],
+    expected: float,
+) -> None:
+    assert _extract_number_near_keywords(text, keywords) == expected
 
 
 @pytest.mark.asyncio
