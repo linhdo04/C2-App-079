@@ -47,7 +47,12 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         raise RuntimeError("Database chưa được khởi tạo. Gọi init_db() trước.")
 
     async with _session_factory() as session:
-        yield session
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
 
 
 @asynccontextmanager

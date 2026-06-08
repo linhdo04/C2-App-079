@@ -23,7 +23,9 @@ def create_graph() -> Any:
 
     # Định nghĩa edges
     workflow.set_entry_point("database")
-    workflow.add_edge("database", END)
+    workflow.add_edge("database", "search")
+    workflow.add_edge("search", "weather")
+    workflow.add_edge("weather", END)
 
     return workflow.compile()
 

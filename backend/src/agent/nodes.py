@@ -34,7 +34,20 @@ async def get_weather_forecast_node(state: AgentState) -> AgentState:
     """Node để lấy dự báo thời tiết."""
     messages = state["messages"]
     last_message = messages[-1] if messages else None
-    location = last_message.content if last_message else "Hanoi"
+
+    # Extract location từ content hoặc dùng default
+    content = last_message.content if last_message else ""
+    location = "Hanoi"  # Default location
+
+    # Chỉ xử lý nếu content là string
+    if isinstance(content, str):
+        content_lower = content.lower()
+        # Cố gắng extract location từ message
+        if "hà nội" in content_lower or "hanoi" in content_lower:
+            location = "Hanoi"
+        elif "hồ chí minh" in content_lower or "saigon" in content_lower:
+            location = "Ho Chi Minh"
+        # Có thể thêm logic extract location phức tạp hơn
 
     result = await get_weather_forecast.ainvoke({"location": location, "days": 7})
     return {"messages": [ToolMessage(content=result, tool_call_id="weather")]}
