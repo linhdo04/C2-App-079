@@ -28,30 +28,19 @@
 ### 2. Documentation
 
 #### API Documentation
-- ✅ `docs/api/agent.md`: Comprehensive API docs
-  - Overview & architecture
-  - All 4 tools documented
-  - Configuration guide
-  - 3 usage examples
-  - Implementation details
-  - Testing guide
+- ✅ `docs/api/agent.md`: Agent API contract
+  - Endpoint request and response schema
+  - Error behavior
+  - Usage example
+  - Links to current implementation docs
 
 #### Architecture Documentation
-- ✅ `docs/architecture/agent-architecture.md`: Detailed architecture
-  - System architecture diagram
-  - 6 core components explained
-  - Data flow diagrams
-  - State evolution examples
-  - Design decisions
-  - Testing strategy
-  - Performance considerations
-  - Future enhancements roadmap
-
-#### Main README
-- ✅ `docs/README.md`: Updated với links
-  - Agent documentation links
-  - Quick links section
-  - Contributing guidelines
+- ✅ `docs/agent/`: Current AI Agent documentation
+  - Overview and current limitations
+  - Architecture and graph workflow
+  - Tool behavior
+  - Development and testing guide
+- ✅ `docs/architecture/agent-architecture.md`: Pointer to current agent docs
 
 ### 3. Code Quality
 
@@ -134,10 +123,10 @@ src/agent/
 7. `/src/agent/tools/analysis.py` - NEW analysis tool
 8. `/test_agent.py` - Test script
 
-### Documentation (4 files)
-1. `/docs/README.md` - Updated với agent links
-2. `/docs/api/agent.md` - Complete API docs (274 lines)
-3. `/docs/architecture/agent-architecture.md` - Detailed arch docs (535 lines)
+### Documentation
+1. `/docs/api/agent.md` - Agent API contract
+2. `/docs/agent/` - Current AI Agent docs
+3. `/docs/architecture/agent-architecture.md` - Pointer to current agent docs
 4. This summary document
 
 ## Testing Results
@@ -218,7 +207,8 @@ print(answer)
 
 ### Documentation
 - API Docs: `docs/api/agent.md`
-- Architecture: `docs/architecture/agent-architecture.md`
+- Agent Docs: `docs/agent/README.md`
+- Architecture: `docs/agent/architecture.md`
 - ADR: `docs/adr/0004-langchain-gemini.md`
 
 ### External
