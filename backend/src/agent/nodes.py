@@ -25,6 +25,57 @@ from .tools import (
 
 ToolRunner = Callable[[str], Awaitable[str]]
 
+DATABASE_KEYWORDS = ("user", "users", "người dùng", "người-dùng", "email", "tên")
+WEATHER_KEYWORDS = (
+    "thời tiết",
+    "dự báo",
+    "mưa",
+    "nhiệt độ",
+    "nắng",
+    "nóng",
+    "lạnh",
+    "ẩm",
+    "khô hạn",
+    "bão",
+    "áp thấp",
+    "weather",
+    "forecast",
+)
+ANALYSIS_KEYWORDS = (
+    "diện tích",
+    "năng suất",
+    "sản lượng",
+    "tấn/ha",
+    "tấn trên ha",
+    "yield",
+    "ước tính",
+    "tính",
+    "thu hoạch",
+    "sản xuất",
+)
+SEARCH_KEYWORDS = (
+    "giá",
+    "giá cả",
+    "thị trường",
+    "kỹ thuật",
+    "sâu bệnh",
+    "dịch bệnh",
+    "trồng",
+    "canh tác",
+    "lúa",
+    "cây",
+    "mới nhất",
+    "phân bón",
+    "thuốc",
+    "giống",
+    "sâu",
+    "bệnh",
+    "nông sản",
+)
+AREA_KEYWORDS = ("ha", "hecta", "hectare")
+YIELD_KEYWORDS = ("tấn/ha", "tấn trên ha", "tan/ha", "năng suất")
+NUMBER_PATTERN = r"(\d+(?:\.\d+)?)"
+
 
 def _question_from_state(state: AgentState) -> str:
     question = state.get("question")
@@ -37,58 +88,28 @@ def _question_from_state(state: AgentState) -> str:
     return str(content or "")
 
 
+def _normalize_text(text: str) -> str:
+    return " ".join(text.lower().replace(",", ".").split())
+
+
+def _has_keyword(text: str, keywords: tuple[str, ...]) -> bool:
+    return any(keyword in text for keyword in keywords)
+
+
 def _route_intents(question: str) -> list[str]:
-    ql = question.lower()
+    ql = _normalize_text(question)
     intents: list[str] = []
 
-    if any(
-        keyword in ql
-        for keyword in ("user", "users", "người dùng", "người-dùng", "email", "tên")
-    ):
+    if _has_keyword(ql, DATABASE_KEYWORDS):
         intents.append("database")
 
-    if any(
-        keyword in ql
-        for keyword in (
-            "thời tiết",
-            "dự báo",
-            "mưa",
-            "nhiệt độ",
-            "nắng",
-            "weather",
-            "forecast",
-        )
-    ):
+    if _has_keyword(ql, WEATHER_KEYWORDS):
         intents.append("weather")
 
-    if any(
-        keyword in ql
-        for keyword in (
-            "diện tích",
-            "năng suất",
-            "sản lượng",
-            "tấn/ha",
-            "tấn trên ha",
-            "yield",
-        )
-    ):
+    if _has_keyword(ql, ANALYSIS_KEYWORDS):
         intents.append("analysis")
 
-    if any(
-        keyword in ql
-        for keyword in (
-            "giá",
-            "thị trường",
-            "kỹ thuật",
-            "sâu bệnh",
-            "dịch bệnh",
-            "trồng",
-            "canh tác",
-            "lúa",
-            "cây",
-            "mới nhất",
-        )
-    ):
+    if _has_keyword(ql, SEARCH_KEYWORDS):
         intents.append("search")
 
     if not intents:
@@ -98,7 +119,7 @@ def _route_intents(question: str) -> list[str]:
 
 
 def _extract_location(question: str) -> str:
-    ql = question.lower()
+    ql = _normalize_text(question)
     if "hà nội" in ql or "hanoi" in ql:
         return "Hanoi"
     if "hồ chí minh" in ql or "tp.hcm" in ql or "tphcm" in ql or "saigon" in ql:
@@ -107,11 +128,9 @@ def _extract_location(question: str) -> str:
 
 
 def _extract_crop_data(question: str) -> dict[str, Any]:
-    ql = question.lower()
-    area = _extract_number_before_keywords(ql, ("ha", "hecta", "hectare"))
-    yield_per_ha = _extract_number_before_keywords(
-        ql, ("tấn/ha", "tấn trên ha", "tan/ha")
-    )
+    ql = _normalize_text(question)
+    area = _extract_number_near_keywords(ql, AREA_KEYWORDS)
+    yield_per_ha = _extract_number_near_keywords(ql, YIELD_KEYWORDS)
 
     crop_name = "không xác định"
     for crop in ("lúa", "cà phê", "tiêu", "ngô", "sắn", "cao su"):
@@ -127,10 +146,15 @@ def _extract_crop_data(question: str) -> dict[str, Any]:
     }
 
 
-def _extract_number_before_keywords(text: str, keywords: tuple[str, ...]) -> float:
-    normalized = text.replace(",", ".")
+def _extract_number_near_keywords(text: str, keywords: tuple[str, ...]) -> float:
+    normalized = _normalize_text(text)
     for keyword in keywords:
-        match = re.search(rf"(\d+(?:\.\d+)?)\s*{re.escape(keyword)}", normalized)
+        escaped_keyword = re.escape(keyword)
+        match = re.search(rf"{NUMBER_PATTERN}\s*{escaped_keyword}", normalized)
+        if match:
+            return float(match.group(1))
+
+        match = re.search(rf"{escaped_keyword}\s*{NUMBER_PATTERN}", normalized)
         if match:
             return float(match.group(1))
     return 0.0
@@ -170,7 +194,7 @@ async def _search_runner(question: str) -> str:
         try:
             result = await web_search.ainvoke({"query": question})
             return str(result)
-        except NotImplementedError:
+        except (AttributeError, NotImplementedError):
             pass
     return await _run_sync_tool_in_thread({"query": question})
 
