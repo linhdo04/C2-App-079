@@ -128,8 +128,12 @@ def test_extract_crop_data_supports_common_number_formats(
     ("text", "keywords", "expected"),
     [
         ("10 ha", ("ha",), 10.0),
+        ("10ha", ("ha",), 10.0),
         ("ha 10", ("ha",), 10.0),
+        ("ha10", ("ha",), 10.0),
+        ("6tấn/ha", ("tấn/ha",), 6.0),
         ("năng suất 4.2", ("năng suất",), 4.2),
+        ("năng suất4.2", ("năng suất",), 4.2),
         ("4.2 năng suất", ("năng suất",), 4.2),
     ],
 )

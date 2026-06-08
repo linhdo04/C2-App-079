@@ -85,6 +85,7 @@ AREA_KEYWORDS = ("ha", "hecta", "hectare")
 YIELD_KEYWORDS = ("tấn/ha", "tấn trên ha", "tan/ha", "năng suất")
 NUMBER_PATTERN = r"(\d+(?:\.\d+)?)"
 KEYWORD_BOUNDARY = r"(?<![\w-]){keyword}(?![\w-])"
+NUMERIC_KEYWORD_BOUNDARY = r"(?<![^\W\d_]){keyword}(?![^\W\d_])"
 
 
 def _question_from_state(state: AgentState) -> str:
@@ -104,6 +105,10 @@ def _normalize_text(text: str) -> str:
 
 def _keyword_pattern(keyword: str) -> str:
     return KEYWORD_BOUNDARY.format(keyword=re.escape(keyword))
+
+
+def _numeric_keyword_pattern(keyword: str) -> str:
+    return NUMERIC_KEYWORD_BOUNDARY.format(keyword=re.escape(keyword))
 
 
 def _has_keyword(text: str, keywords: tuple[str, ...]) -> bool:
@@ -163,9 +168,10 @@ def _extract_crop_data(question: str) -> dict[str, Any]:
 def _extract_number_near_keywords(text: str, keywords: tuple[str, ...]) -> float:
     normalized = _normalize_text(text)
     for keyword in keywords:
+        keyword_pattern = _numeric_keyword_pattern(keyword)
         match = re.search(
-            rf"(?:{NUMBER_PATTERN}\s*{_keyword_pattern(keyword)})"
-            rf"|(?:{_keyword_pattern(keyword)}\s*{NUMBER_PATTERN})",
+            rf"(?:{NUMBER_PATTERN}\s*{keyword_pattern})"
+            rf"|(?:{keyword_pattern}\s*{NUMBER_PATTERN})",
             normalized,
         )
         if match:
