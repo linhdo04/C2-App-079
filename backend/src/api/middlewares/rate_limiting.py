@@ -24,11 +24,10 @@ from starlette.responses import JSONResponse, Response
 #   4. If the quota has been exceeded:
 #        - Return the required wait time (retry_after_ms)
 #
-# KEYS[1] : Redis key (e.g. "rl:ip:127.0.0.1")
-# ARGV[1] : Current timestamp in milliseconds
-# ARGV[2] : Window size in milliseconds
-# ARGV[3] : Maximum number of requests allowed within the window
-# ARGV[4] : Unique member for ZADD (request UUID)
+# ARGV[0] : Current timestamp in milliseconds
+# ARGV[1] : Window size in milliseconds
+# ARGV[2] : Maximum number of requests allowed within the window
+# ARGV[3] : Unique member for ZADD (request UUID)
 #
 # Returns: [allowed, remaining, retry_after_ms]
 _SLIDING_WINDOW_SCRIPT = """
@@ -61,49 +60,32 @@ _logger_rl = structlog.get_logger("rate_limit")
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """
-    Sliding window rate limiting với Redis backend.
+    Sliding window rate limiting with a Redis backend.
 
-    Áp dụng hai tầng giới hạn độc lập:
-      - Theo IP           : giới hạn thấp hơn, chống abuse từ anonymous traffic
-      - Theo API key      : giới hạn cao hơn, dành cho authenticated clients
+    Applies two independent layers of rate limiting:
+    - By IP      : Lower limit to prevent abuse from anonymous traffic.
+    - By API Key : Higher limit reserved for authenticated clients.
 
-    Nếu request có cả IP lẫn API key → cả hai tầng đều được kiểm tra,
-    tầng nào bị vượt trước thì trả 429.
+    If a request contains both an IP and an API key, both layers are checked.
+    Whichever limit is breached first will trigger a 429 response.
 
-    Headers trả về:
-      X-RateLimit-Limit      : giới hạn áp dụng
-      X-RateLimit-Remaining  : số request còn lại trong window
-      Retry-After            : số giây cần chờ (chỉ khi bị block)
+    Response Headers:
+    X-RateLimit-Limit     : The applied rate limit.
+    X-RateLimit-Remaining : The number of remaining requests within the current window.
+    Retry-After           : The number of seconds to wait (only included when blocked).
 
     Args:
-        redis:           Redis async client đã kết nối.
-        ip_limit:        Số request tối đa theo IP mỗi window.
-        ip_window:       Độ dài window theo IP (giây).
-        key_limit:       Số request tối đa theo API key mỗi window.
-        key_window:      Độ dài window theo API key (giây).
-        api_key_header:  Tên header chứa API key.
-        exclude_paths:   Các path không áp dụng rate limit.
-
-    Example:
-        # main.py
-        from redis.asyncio import Redis
-        from src.api.middleware import RateLimitMiddleware
-
-        redis = Redis.from_url("redis://localhost:6379", decode_responses=True)
-        app.add_middleware(
-            RateLimitMiddleware,
-            redis=redis,
-            ip_limit=60,
-            ip_window=60,
-            key_limit=600,
-            key_window=60,
-        )
+        ip_limit:        Maximum number of requests allowed per IP window.
+        ip_window:       Duration of the IP window in seconds.
+        key_limit:       Maximum number of requests allowed per API key window.
+        key_window:      Duration of the API key window in seconds.
+        api_key_header:  The header name containing the API key.
+        exclude_paths:   List of paths exempted from rate limiting.
     """
 
     def __init__(
         self,
         app: Any,
-        redis: Redis | None = None,
         ip_limit: int = 60,
         ip_window: int = 60,
         key_limit: int = 600,
@@ -113,7 +95,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     ) -> None:
         super().__init__(app)
         # Accept None for redis and do lazy initialization at request time.
-        self._redis = redis
         self._ip_limit = ip_limit
         self._ip_window_ms = ip_window * 1000
         self._key_limit = key_limit
@@ -134,21 +115,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.url.path in self._exclude_paths:
             return await call_next(request)
 
-        # Ensure we have a Redis client and the registered Lua script.
-        if self._redis is None:
-            try:
-                from infrastructure import get_redis
-
-                # get_redis() may raise if Redis hasn't been initialized yet.
-                self._redis = get_redis()
-            except Exception as exc:
-                _logger_rl.warning("rate_limit_no_redis", error=str(exc))
-                # Fail-open: if Redis is not available, don't block requests.
-                return await call_next(request)
+        redis: Redis | None = getattr(request.app.state, "redis", None)
+        if redis is None:
+            _logger_rl.warning("rate_limit_no_redis")
+            return await call_next(request)
 
         if self._script is None:
             try:
-                self._script = self._redis.register_script(_SLIDING_WINDOW_SCRIPT)
+                self._script = redis.register_script(_SLIDING_WINDOW_SCRIPT)
             except Exception as exc:
                 _logger_rl.warning("rate_limit_register_script_failed", error=str(exc))
                 return await call_next(request)
