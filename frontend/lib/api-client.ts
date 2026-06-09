@@ -134,10 +134,21 @@ function parseEventBlock(block: string): ServerSentEvent | null {
   const dataLines: string[] = [];
 
   for (const line of block.split(/\r?\n/)) {
-    if (line.startsWith("event:")) {
-      event = line.slice(6).trim();
-    } else if (line.startsWith("data:")) {
-      dataLines.push(line.slice(5).trimStart());
+    if (line.startsWith(":")) {
+      continue;
+    }
+
+    const colonIndex = line.indexOf(":");
+    const field = colonIndex === -1 ? line : line.slice(0, colonIndex);
+    let value = colonIndex === -1 ? "" : line.slice(colonIndex + 1);
+    if (value.startsWith(" ")) {
+      value = value.slice(1);
+    }
+
+    if (field === "event") {
+      event = value;
+    } else if (field === "data") {
+      dataLines.push(value);
     }
   }
 

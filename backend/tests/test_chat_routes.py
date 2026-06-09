@@ -40,7 +40,7 @@ class FakeSession:
         self.added: list[Any] = []
         self.next_id = 1
         self.statements: list[Any] = []
-        self.rolled_back = False
+        self.rollback_count = 0
         self.committed = False
 
     async def execute(self, statement: Any) -> FakeScalarResult:
@@ -64,7 +64,7 @@ class FakeSession:
         return None
 
     async def rollback(self) -> None:
-        self.rolled_back = True
+        self.rollback_count += 1
 
     async def commit(self) -> None:
         self.committed = True
@@ -225,8 +225,10 @@ async def test_stream_chat_message_emits_tokens_and_persists_done_event(
     assert 'event: token\ndata: {"content": "chào"}' in body
     assert "event: done" in body
     assert '"message": "Xin chào"' in body
-    assert session.rolled_back is False
+    assert session.rollback_count == 1
     assert session.committed is True
+    assert "FOR UPDATE" in str(session.statements[1])
+    assert session.statements[1].get_execution_options()["populate_existing"] is True
 
 
 @pytest.mark.asyncio
@@ -257,7 +259,7 @@ async def test_stream_chat_message_rolls_back_and_emits_error(
 
     assert "event: error" in body
     assert "stream unavailable" in body
-    assert session.rolled_back is True
+    assert session.rollback_count == 2
     assert session.added == []
 
 

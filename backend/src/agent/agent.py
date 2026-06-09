@@ -85,8 +85,7 @@ async def stream_agent(question: str) -> AsyncIterator[AgentStreamEvent]:
     started_at = time.perf_counter()
     try:
         event_logger.info(
-            "agent_stream_first_event",
-            duration_ms=round((time.perf_counter() - started_at) * 1000, 2),
+            "agent_stream_started",
         )
         yield {
             "event": "status",

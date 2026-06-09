@@ -331,6 +331,9 @@ async def stream_chat_message(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
     await _get_active_chat(session, chat_id, current_user.id)
+    # Release the read-only transaction before the potentially long LLM stream.
+    # Persistence revalidates ownership and locks the latest chat row.
+    await session.rollback()
     question = req.question.strip()
     user_id = current_user.id
 
