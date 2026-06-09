@@ -38,7 +38,7 @@ Output trong results/:
   *_seg.png        — mask tô màu
   *_stats.json     — % diện tích từng class
   *_path.png       — flight path overlay
-  *_waypoints.json — list waypoints {x, y, sweep_idx}
+  *_waypoints.json — list waypoints {x, y, sweep_idx, is_transit}
 
 
 ── TUỲ CHỈNH PATH PLANNER ───────────────────────────
