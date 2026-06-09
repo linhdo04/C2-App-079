@@ -10,9 +10,17 @@ class ReportModel(BaseModel, table=True):
     __tablename__ = "reports"
 
     mission_id: int | None = Field(
-        default=None, foreign_key="missions.id", nullable=True
+        default=None,
+        foreign_key="missions.id",
+        nullable=True,
+        index=True,
     )
-    author_id: int | None = Field(default=None, foreign_key="users.id", nullable=True)
+    author_id: int | None = Field(
+        default=None,
+        foreign_key="users.id",
+        nullable=True,
+        index=True,
+    )
     title: str | None = Field(default=None)
     content: str | None = Field(default=None)
     summary: str | None = Field(default=None)
