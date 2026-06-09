@@ -1,0 +1,31 @@
+{
+  "image": {
+    "width": 9095,
+    "height": 9636
+  },
+  "planner": "rcpp",
+  "total_waypoints": 2474,
+  "total_dist_px": 1252720.26,
+  "coverage": {
+    "background": {
+      "pixels": 15277895,
+      "percent": 17.43
+    },
+    "building": {
+      "pixels": 42658,
+      "percent": 0.05
+    },
+    "woodland": {
+      "pixels": 61835572,
+      "percent": 70.56
+    },
+    "water": {
+      "pixels": 9736397,
+      "percent": 11.11
+    },
+    "road": {
+      "pixels": 746898,
+      "percent": 0.85
+    }
+  }
+}

@@ -143,6 +143,51 @@ def predict(
     return logits.argmax(axis=0).astype(np.uint8)
 
 
+# ── Waypoint enrichment ───────────────────────────────────────────────────────
+
+def enrich_waypoints(waypoints) -> list:
+    """Add heading, dist_from_prev_px, cumulative_dist_px to each waypoint dict."""
+    result = []
+    cum = 0.0
+    for i, wp in enumerate(waypoints):
+        d = asdict(wp)
+        if i == 0:
+            heading   = 0.0
+            dist_prev = 0.0
+        else:
+            prev      = waypoints[i - 1]
+            dx        = wp.x - prev.x
+            dy        = wp.y - prev.y
+            dist_prev = float(np.hypot(dx, dy))
+            heading   = float(np.degrees(np.arctan2(dy, dx)) % 360)
+        cum += dist_prev
+        d["heading"]            = round(heading,   2)
+        d["dist_from_prev_px"]  = round(dist_prev, 2)
+        d["cumulative_dist_px"] = round(cum,        2)
+        result.append(d)
+    return result
+
+
+def save_mission_json(
+    path:      Path,
+    stem:      str,
+    image_hw:  tuple,
+    planner:   str,
+    waypoints: list,
+    stats:     dict,
+) -> None:
+    H, W = image_hw
+    total_dist = sum(wp["dist_from_prev_px"] for wp in waypoints)
+    mission = {
+        "image":            {"width": W, "height": H},
+        "planner":          planner,
+        "total_waypoints":  len(waypoints),
+        "total_dist_px":    round(total_dist, 2),
+        "coverage":         stats,
+    }
+    path.write_text(json.dumps(mission, indent=2))
+
+
 # ── Coverage statistics ───────────────────────────────────────────────────────
 
 def coverage_stats(mask: np.ndarray) -> dict:
@@ -243,13 +288,20 @@ def run_single(
         print(f"[INF] Cells / sweeps      : {n_sweeps}")
         print(f"[INF] Total waypoints     : {len(waypoints)}")
 
-        suffix   = f"_{pname}" if planner_name == "both" else ""
-        path_img = out_dir / f"{stem}_path{suffix}.png"
-        wp_path  = out_dir / f"{stem}_waypoints{suffix}.json"
+        suffix      = f"_{pname}" if planner_name == "both" else ""
+        path_img    = out_dir / f"{stem}_path{suffix}.png"
+        wp_path     = out_dir / f"{stem}_waypoints{suffix}.json"
+        mission_path = out_dir / f"{stem}_mission{suffix}.json"
+
         planner.visualize(mask, waypoints, str(path_img))
-        wp_path.write_text(json.dumps([asdict(wp) for wp in waypoints], indent=2))
+
+        enriched = enrich_waypoints(waypoints)
+        wp_path.write_text(json.dumps(enriched, indent=2))
+        save_mission_json(mission_path, stem, (H, W), pname, enriched, stats)
+
         print(f"[INF] Flight path vis     → {path_img}")
         print(f"[INF] Waypoints JSON      → {wp_path}")
+        print(f"[INF] Mission JSON        → {mission_path}")
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
