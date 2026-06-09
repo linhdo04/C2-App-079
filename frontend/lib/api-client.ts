@@ -9,7 +9,12 @@ type ApiErrorBody = {
   detail?: string;
 };
 
-type FetchInit = Parameters<typeof fetch>[1];
+type FetchInit = NonNullable<Parameters<typeof fetch>[1]>;
+
+export type ServerSentEvent = {
+  event: string;
+  data: unknown;
+};
 
 export class ApiError extends Error {
   status: number;
@@ -81,4 +86,107 @@ export async function requestProtected<T>(
   const refreshedSession = await refreshSession();
   const data = await requestApi<T>(path, init, refreshedSession.access_token);
   return { data, session: refreshedSession };
+}
+
+async function fetchProtectedStream(
+  path: string,
+  session: StoredSession,
+  init: FetchInit,
+): Promise<{ response: Response; session: StoredSession }> {
+  let currentSession = session;
+  let response = await fetch(`${API_BASE_URL}${path}`, {
+    ...init,
+    credentials: "include",
+    headers: protectedHeaders(init, currentSession.access_token),
+  });
+
+  if (response.status === 401) {
+    currentSession = await refreshSession();
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      credentials: "include",
+      headers: protectedHeaders(init, currentSession.access_token),
+    });
+  }
+
+  if (!response.ok) {
+    throw new ApiError(await parseError(response), response.status);
+  }
+  if (response.body === null) {
+    throw new ApiError("Máy chủ không trả về luồng dữ liệu.", response.status);
+  }
+
+  return { response, session: currentSession };
+}
+
+function protectedHeaders(init: FetchInit, accessToken: string) {
+  const headers = new Headers(init.headers);
+  headers.set("Authorization", `Bearer ${accessToken}`);
+  if (!headers.has("Content-Type") && init.body !== undefined) {
+    headers.set("Content-Type", "application/json");
+  }
+  headers.set("Accept", "text/event-stream");
+  return headers;
+}
+
+function parseEventBlock(block: string): ServerSentEvent | null {
+  let event = "message";
+  const dataLines: string[] = [];
+
+  for (const line of block.split(/\r?\n/)) {
+    if (line.startsWith("event:")) {
+      event = line.slice(6).trim();
+    } else if (line.startsWith("data:")) {
+      dataLines.push(line.slice(5).trimStart());
+    }
+  }
+
+  if (dataLines.length === 0) {
+    return null;
+  }
+
+  const rawData = dataLines.join("\n");
+  try {
+    return { event, data: JSON.parse(rawData) as unknown };
+  } catch {
+    return { event, data: rawData };
+  }
+}
+
+export async function requestProtectedEventStream(
+  path: string,
+  session: StoredSession,
+  init: FetchInit,
+  onEvent: (event: ServerSentEvent) => void,
+): Promise<StoredSession> {
+  const { response, session: currentSession } = await fetchProtectedStream(path, session, init);
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+
+    let boundary = buffer.search(/\r?\n\r?\n/);
+    while (boundary >= 0) {
+      const separator = buffer.slice(boundary).match(/^\r?\n\r?\n/)?.[0] ?? "\n\n";
+      const event = parseEventBlock(buffer.slice(0, boundary));
+      buffer = buffer.slice(boundary + separator.length);
+      if (event !== null) {
+        onEvent(event);
+      }
+      boundary = buffer.search(/\r?\n\r?\n/);
+    }
+
+    if (done) {
+      const event = parseEventBlock(buffer);
+      if (event !== null) {
+        onEvent(event);
+      }
+      break;
+    }
+  }
+
+  return currentSession;
 }

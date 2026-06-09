@@ -1,9 +1,8 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { Activity, Radar } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { AgentQuestionPanel } from "@/components/features/agent/agent-question-panel";
 import { ChatHistoryPanel } from "@/components/features/agent/chat-history-panel";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -15,46 +14,101 @@ import {
   useCurrentUserQuery,
   useDeleteChatMutation,
   useLogoutMutation,
-  useSendChatMessageMutation,
 } from "@/lib/api-hooks";
-import { ApiError } from "@/lib/api-client";
+import { ApiError, requestProtectedEventStream } from "@/lib/api-client";
 import { readSession } from "@/lib/auth-client";
 import { useAuthStore } from "@/lib/auth-store";
 import type { AgentQuestionFormValues } from "@/lib/validation";
+import type { ChatMessage, ChatMessageResponse } from "@/types/agent";
 import type { StoredSession } from "@/types/auth";
 
-export function AgentWorkspace() {
+type AgentWorkspaceProps = {
+  chatId?: number | null;
+};
+
+export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const [activeChatId, setActiveChatId] = useState<number | null>(null);
   const [error, setError] = useState("");
-  const [isCreatingNew, setIsCreatingNew] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [message, setMessage] = useState("");
+  const [pendingQuestion, setPendingQuestion] = useState("");
   const [search, setSearch] = useState("");
+  const [streamingAnswer, setStreamingAnswer] = useState("");
+  const [streamingStatus, setStreamingStatus] = useState("");
+  const [isStreaming, setIsStreaming] = useState(false);
+  const tokenBufferRef = useRef("");
+  const animationFrameRef = useRef<number | null>(null);
   const deferredSearch = useDeferredValue(search);
   const { clearAuth, isBooting, session, setBooting, setSession, setUser, user } = useAuthStore();
   const currentUserQuery = useCurrentUserQuery(session);
   const chatsQuery = useChatsQuery(session, deferredSearch);
   const chats = useMemo(() => chatsQuery.data?.data ?? [], [chatsQuery.data?.data]);
-  const selectedChatId = activeChatId ?? (!isCreatingNew ? (chats[0]?.id ?? null) : null);
-  const chatQuery = useChatQuery(session, selectedChatId);
+  const chatQuery = useChatQuery(session, chatId);
   const createChatMutation = useCreateChatMutation();
   const deleteChatMutation = useDeleteChatMutation();
   const logoutMutation = useLogoutMutation();
-  const sendMessageMutation = useSendChatMessageMutation();
 
   const activeChat = chatQuery.data?.data;
-  const messages = activeChat?.messages ?? [];
-  const isSending = createChatMutation.isPending || sendMessageMutation.isPending;
+  const messages = useMemo(() => activeChat?.messages ?? [], [activeChat?.messages]);
+  const displayMessages = useMemo(() => {
+    const pendingMessages: ChatMessage[] = [];
+    const timestamp = new Date().toISOString();
+    if (pendingQuestion.length > 0) {
+      pendingMessages.push({
+        id: -1,
+        role: "user",
+        message: pendingQuestion,
+        timestamp,
+      });
+    }
+    if (streamingAnswer.length > 0) {
+      pendingMessages.push({
+        id: -2,
+        role: "assistant",
+        message: streamingAnswer,
+        timestamp,
+      });
+    }
+    return [...messages, ...pendingMessages];
+  }, [messages, pendingQuestion, streamingAnswer]);
+  const isSending = createChatMutation.isPending || isStreaming;
   const queryError = chatsQuery.error ?? chatQuery.error;
+
+  const flushTokenBuffer = useCallback(() => {
+    animationFrameRef.current = null;
+    if (tokenBufferRef.current.length === 0) {
+      return;
+    }
+    const bufferedTokens = tokenBufferRef.current;
+    tokenBufferRef.current = "";
+    setStreamingAnswer((answer) => answer + bufferedTokens);
+  }, []);
+
+  const queueToken = useCallback(
+    (token: string) => {
+      tokenBufferRef.current += token;
+      if (animationFrameRef.current === null) {
+        animationFrameRef.current = window.requestAnimationFrame(flushTokenBuffer);
+      }
+    },
+    [flushTokenBuffer],
+  );
+
+  useEffect(
+    () => () => {
+      if (animationFrameRef.current !== null) {
+        window.cancelAnimationFrame(animationFrameRef.current);
+      }
+    },
+    [],
+  );
 
   const resetAuthState = useCallback(
     (notice?: string) => {
       clearAuth();
       queryClient.removeQueries({ queryKey: ["auth"] });
       queryClient.removeQueries({ queryKey: ["agent"] });
-      setActiveChatId(null);
       if (notice !== undefined) {
         setMessage(notice);
       }
@@ -135,34 +189,75 @@ export function AgentWorkspace() {
 
     setError("");
     setMessage("");
+    setPendingQuestion(values.question);
+    setStreamingAnswer("");
+    setStreamingStatus("Đang kết nối...");
+    setIsStreaming(true);
+    tokenBufferRef.current = "";
 
     try {
       let currentSession: StoredSession = session;
-      let chatId = selectedChatId;
+      let currentChatId = chatId;
+      let completedResponse: ChatMessageResponse | null = null;
+      let streamError = "";
 
-      if (chatId === null) {
+      if (currentChatId === null) {
         const created = await createChatMutation.mutateAsync(currentSession);
         currentSession = created.session;
-        chatId = created.data.id;
+        currentChatId = created.data.id;
         setSession(currentSession);
-        setActiveChatId(chatId);
-        setIsCreatingNew(false);
       }
 
-      const result = await sendMessageMutation.mutateAsync({
-        body: { question: values.question },
-        chatId,
+      currentSession = await requestProtectedEventStream(
+        `/agent/chats/${currentChatId}/messages/stream`,
+        currentSession,
+        {
+          method: "POST",
+          body: JSON.stringify({ question: values.question }),
+        },
+        (event) => {
+          if (event.event === "token") {
+            const token = event.data as { content?: unknown };
+            if (typeof token.content === "string") {
+              setStreamingStatus("");
+              queueToken(token.content);
+            }
+          } else if (event.event === "status") {
+            const status = event.data as { message?: unknown };
+            if (typeof status.message === "string") {
+              setStreamingStatus(status.message);
+            }
+          } else if (event.event === "done") {
+            flushTokenBuffer();
+            completedResponse = event.data as ChatMessageResponse;
+          } else if (event.event === "error") {
+            const streamErrorData = event.data as { detail?: unknown };
+            streamError =
+              typeof streamErrorData.detail === "string" ? streamErrorData.detail : "Luồng phản hồi bị gián đoạn.";
+          }
+        },
+      );
+      setSession(currentSession);
+
+      if (streamError.length > 0) {
+        throw new Error(streamError);
+      }
+      if (completedResponse === null) {
+        throw new Error("Luồng phản hồi kết thúc nhưng chưa lưu được câu trả lời.");
+      }
+
+      const result = completedResponse as ChatMessageResponse;
+      queryClient.setQueryData(["agent", "chats", currentChatId], {
+        data: {
+          ...result.chat,
+          messages: [...messages, result.user_message, result.assistant_message],
+        },
         session: currentSession,
       });
-      setSession(result.session);
-      queryClient.setQueryData(["agent", "chats", chatId], {
-        data: {
-          ...result.data.chat,
-          messages: [...messages, result.data.user_message, result.data.assistant_message],
-        },
-        session: result.session,
-      });
       await queryClient.invalidateQueries({ queryKey: ["agent", "chats"], exact: false });
+      if (chatId === null) {
+        router.replace(`/agent/${currentChatId}`);
+      }
       return true;
     } catch (apiError) {
       if (apiError instanceof ApiError && apiError.status === 401) {
@@ -171,30 +266,40 @@ export function AgentWorkspace() {
         setError(apiError instanceof Error ? apiError.message : "Không thể gửi câu hỏi. Vui lòng thử lại.");
       }
       return false;
+    } finally {
+      setPendingQuestion("");
+      setStreamingAnswer("");
+      setStreamingStatus("");
+      setIsStreaming(false);
+      tokenBufferRef.current = "";
+      if (animationFrameRef.current !== null) {
+        window.cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
     }
   }
 
   function handleNewChat() {
-    setActiveChatId(null);
-    setIsCreatingNew(true);
     setIsHistoryOpen(false);
     setError("");
+    router.push("/agent");
   }
 
-  async function handleDelete(chatId: number) {
+  async function handleDelete(chatIdToDelete: number) {
     if (session === null || !window.confirm("Bạn có chắc muốn xoá cuộc trò chuyện này?")) {
       return;
     }
 
     setError("");
     try {
-      const result = await deleteChatMutation.mutateAsync({ chatId, session });
+      const result = await deleteChatMutation.mutateAsync({
+        chatId: chatIdToDelete,
+        session,
+      });
       setSession(result.session);
-      queryClient.removeQueries({ queryKey: ["agent", "chats", chatId] });
-      if (selectedChatId === chatId) {
-        const nextChat = chats.find((chat) => chat.id !== chatId);
-        setActiveChatId(nextChat?.id ?? null);
-        setIsCreatingNew(nextChat === undefined);
+      queryClient.removeQueries({ queryKey: ["agent", "chats", chatIdToDelete] });
+      if (chatId === chatIdToDelete) {
+        router.replace("/agent");
       }
       await queryClient.invalidateQueries({ queryKey: ["agent", "chats"], exact: false });
     } catch (apiError) {
@@ -227,8 +332,8 @@ export function AgentWorkspace() {
 
   if (isBooting || (session !== null && user === null) || session === null || user === null) {
     return (
-      <main className="app-shell flex min-h-screen items-center justify-center px-4 text-foreground">
-        <p className="flex items-center gap-2 text-sm font-medium">
+      <main className="app-shell flex h-dvh items-center justify-center px-4 text-foreground">
+        <p className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
           <Spinner />
           {loadingLabel}
         </p>
@@ -237,72 +342,55 @@ export function AgentWorkspace() {
   }
 
   return (
-    <main className="app-shell relative min-h-screen overflow-x-hidden text-foreground">
+    <main className="app-shell relative flex h-dvh overflow-hidden text-foreground">
       <div className="grid-surface pointer-events-none absolute inset-0" />
-      <section className="relative mx-auto flex min-h-screen w-full max-w-[1440px] flex-col gap-5 px-4 py-5 sm:px-6 sm:py-7 lg:px-8">
-        <header className="flex items-center justify-between gap-4 border-b border-border/60 pb-5">
-          <div className="flex items-center gap-3">
-            <span className="grid size-10 place-items-center rounded-xl bg-primary text-primary-foreground">
-              <Radar className="size-5" />
-            </span>
-            <div>
-              <p className="text-lg font-bold tracking-[-0.03em]">AeroField</p>
-              <p className="eyebrow mt-0.5 text-muted-foreground">Command center</p>
-            </div>
-          </div>
-          <div className="hidden items-center gap-2 rounded-full border border-success/20 bg-success-muted px-3 py-2 sm:flex">
-            <Activity className="size-3.5 text-success" />
-            <span className="eyebrow text-success-foreground">Systems operational</span>
-          </div>
-        </header>
+      <ChatHistoryPanel
+        activeChatId={chatId}
+        chats={chats}
+        isDeleting={deleteChatMutation.isPending}
+        isLoading={chatsQuery.isLoading}
+        isOpen={isHistoryOpen}
+        search={search}
+        user={user}
+        onClose={() => setIsHistoryOpen(false)}
+        onDelete={handleDelete}
+        onLogout={handleLogout}
+        onNewChat={handleNewChat}
+        onOpen={() => setIsHistoryOpen(true)}
+        onSearchChange={setSearch}
+        onSelect={(selectedChatId) => {
+          setIsHistoryOpen(false);
+          router.push(`/agent/${selectedChatId}`);
+        }}
+      />
 
-        {(message.length > 0 || error.length > 0) && (
-          <Alert
-            variant={error.length > 0 ? "destructive" : "success"}
-            role={error.length > 0 ? "alert" : "status"}
-          >
-            <AlertDescription>{error.length > 0 ? error : message}</AlertDescription>
-          </Alert>
-        )}
+      {(message.length > 0 || error.length > 0) && (
+        <Alert
+          className="absolute top-3 right-3 left-14 z-20 mx-auto max-w-xl shadow-2xl lg:left-[276px]"
+          variant={error.length > 0 ? "destructive" : "success"}
+          role={error.length > 0 ? "alert" : "status"}
+        >
+          <AlertDescription>{error.length > 0 ? error : message}</AlertDescription>
+        </Alert>
+      )}
 
-        <section className="grid flex-1 gap-4 lg:grid-cols-[310px_minmax(0,1fr)]">
-          <ChatHistoryPanel
-            activeChatId={selectedChatId}
-            chats={chats}
-            isDeleting={deleteChatMutation.isPending}
-            isLoading={chatsQuery.isLoading}
-            isOpen={isHistoryOpen}
-            search={search}
-            user={user}
-            onClose={() => setIsHistoryOpen(false)}
-            onDelete={handleDelete}
-            onLogout={handleLogout}
-            onNewChat={handleNewChat}
-            onOpen={() => setIsHistoryOpen(true)}
-            onSearchChange={setSearch}
-            onSelect={(chatId) => {
-              setActiveChatId(chatId);
-              setIsCreatingNew(false);
-              setIsHistoryOpen(false);
-            }}
-          />
-          {chatQuery.isLoading && selectedChatId !== null ? (
-            <div className="flex min-h-[680px] items-center justify-center rounded-2xl border border-border bg-card/90">
-              <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Spinner />
-                Đang tải cuộc trò chuyện...
-              </p>
-            </div>
-          ) : (
-            <AgentQuestionPanel
-              isLoading={isSending}
-              messages={messages}
-              title={activeChat?.title ?? null}
-              onSubmit={handleAsk}
-            />
-          )}
-        </section>
-      </section>
+      {chatQuery.isLoading && chatId !== null ? (
+        <div className="relative flex min-w-0 flex-1 items-center justify-center bg-background/55">
+          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Spinner />
+            Đang tải cuộc trò chuyện...
+          </p>
+        </div>
+      ) : (
+        <AgentQuestionPanel
+          key={chatId ?? "new"}
+          isLoading={isSending}
+          messages={displayMessages}
+          streamingStatus={streamingAnswer.length === 0 ? streamingStatus : ""}
+          title={activeChat?.title ?? null}
+          onSubmit={handleAsk}
+        />
+      )}
     </main>
   );
 }

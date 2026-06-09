@@ -43,6 +43,10 @@
 
 - Chat history is persisted and displayed, but previous messages are not yet
   passed into the LangGraph state as LLM conversation context.
+- Added SSE streaming for chat responses so the frontend renders Gemini output
+  incrementally while persisting only the completed answer.
+- Chat routes are URL-driven: `/agent` starts a new chat and
+  `/agent/{chat_id}` opens existing history.
 - Branch: `feat/chat-history-api`.
 
 ---

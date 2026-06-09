@@ -1,3 +1,5 @@
+import json
+from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Annotated, Any, cast
 
@@ -5,9 +7,10 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import ColumnElement, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.responses import StreamingResponse
 
 from agent.agent import graph as _graph
-from agent.agent import run_agent
+from agent.agent import run_agent, stream_agent
 from api.dependencies import get_current_user
 from infrastructure.database.postgres import get_session
 from models.base import get_utc_now
@@ -105,6 +108,53 @@ def _title_from_question(question: str) -> str:
     if len(normalized) <= 60:
         return normalized
     return f"{normalized[:57].rstrip()}..."
+
+
+async def _persist_chat_exchange(
+    session: AsyncSession,
+    chat_id: int,
+    user_id: int,
+    question: str,
+    answer: str,
+) -> ChatMessageResponse:
+    chat = await _get_active_chat(
+        session,
+        chat_id,
+        user_id,
+        for_update=True,
+    )
+    now = get_utc_now()
+    user_message = ChatHistoryModel(
+        user_id=user_id,
+        chat_session_id=chat_id,
+        role=ChatRole.USER,
+        message=question,
+        timestamp=now,
+    )
+    assistant_message = ChatHistoryModel(
+        user_id=user_id,
+        chat_session_id=chat_id,
+        role=ChatRole.ASSISTANT,
+        message=answer,
+    )
+    if chat.title == "Cuộc trò chuyện mới":
+        chat.title = _title_from_question(question)
+    chat.updated_at = now
+    session.add_all([chat, user_message, assistant_message])
+    await session.flush()
+    await session.refresh(chat)
+    await session.refresh(user_message)
+    await session.refresh(assistant_message)
+
+    return ChatMessageResponse(
+        chat=ChatSessionPublic.model_validate(chat),
+        user_message=ChatMessagePublic.model_validate(user_message),
+        assistant_message=ChatMessagePublic.model_validate(assistant_message),
+    )
+
+
+def _sse_event(event: str, data: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 @router.post("/agent/ask")
@@ -254,44 +304,76 @@ async def create_chat_message(
     if current_user.id is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
-    chat = await _get_active_chat(session, chat_id, current_user.id)
+    await _get_active_chat(session, chat_id, current_user.id)
     question = req.question.strip()
     try:
         answer = await run_agent(question)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    chat = await _get_active_chat(
+    return await _persist_chat_exchange(
         session,
         chat_id,
         current_user.id,
-        for_update=True,
+        question,
+        answer,
     )
-    now = get_utc_now()
-    user_message = ChatHistoryModel(
-        user_id=current_user.id,
-        chat_session_id=chat_id,
-        role=ChatRole.USER,
-        message=question,
-        timestamp=now,
-    )
-    assistant_message = ChatHistoryModel(
-        user_id=current_user.id,
-        chat_session_id=chat_id,
-        role=ChatRole.ASSISTANT,
-        message=answer,
-    )
-    if chat.title == "Cuộc trò chuyện mới":
-        chat.title = _title_from_question(question)
-    chat.updated_at = now
-    session.add_all([chat, user_message, assistant_message])
-    await session.flush()
-    await session.refresh(chat)
-    await session.refresh(user_message)
-    await session.refresh(assistant_message)
 
-    return ChatMessageResponse(
-        chat=ChatSessionPublic.model_validate(chat),
-        user_message=ChatMessagePublic.model_validate(user_message),
-        assistant_message=ChatMessagePublic.model_validate(assistant_message),
+
+@router.post("/agent/chats/{chat_id}/messages/stream")
+async def stream_chat_message(
+    chat_id: int,
+    req: AskRequest,
+    current_user: Annotated[UserModel, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> StreamingResponse:
+    if current_user.id is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+
+    await _get_active_chat(session, chat_id, current_user.id)
+    question = req.question.strip()
+    user_id = current_user.id
+
+    async def event_stream() -> AsyncIterator[str]:
+        answer_parts: list[str] = []
+        try:
+            async for event in stream_agent(question):
+                event_name = event["event"]
+                if event_name == "token":
+                    content = event.get("content", "")
+                    answer_parts.append(content)
+                    yield _sse_event("token", {"content": content})
+                else:
+                    yield _sse_event(
+                        "status",
+                        {key: value for key, value in event.items() if key != "event"},
+                    )
+
+            answer = "".join(answer_parts)
+            if not answer:
+                raise RuntimeError("Agent returned an empty response")
+
+            result = await _persist_chat_exchange(
+                session,
+                chat_id,
+                user_id,
+                question,
+                answer,
+            )
+            await session.commit()
+            yield _sse_event(
+                "done",
+                result.model_dump(mode="json"),
+            )
+        except Exception as exc:
+            await session.rollback()
+            yield _sse_event("error", {"detail": str(exc)})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
     )

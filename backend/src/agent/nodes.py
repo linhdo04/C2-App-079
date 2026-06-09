@@ -2,9 +2,11 @@
 
 import asyncio
 import re
-from collections.abc import Awaitable, Callable
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
+import structlog
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
@@ -24,6 +26,7 @@ from .tools import (
 )
 
 ToolRunner = Callable[[str], Awaitable[str]]
+logger = structlog.get_logger(__name__)
 
 DATABASE_KEYWORDS = (
     "user",
@@ -189,11 +192,18 @@ async def _run_tool(
     question: str,
     runner: ToolRunner,
 ) -> tuple[str, str | None, str | None]:
+    started_at = time.perf_counter()
     try:
         result = await runner(question)
         return name, result, None
     except Exception as exc:  # pragma: no cover - exercised through graph tests
         return name, None, str(exc)
+    finally:
+        logger.info(
+            "agent_tool_completed",
+            tool=name,
+            duration_ms=round((time.perf_counter() - started_at) * 1000, 2),
+        )
 
 
 async def _database_runner(question: str) -> str:
@@ -269,6 +279,56 @@ def _fallback_answer(
     return f"Tôi chưa có đủ dữ liệu để trả lời câu hỏi này. Câu hỏi đã nhận: {question}"
 
 
+def _synthesis_messages(state: AgentState) -> list[BaseMessage]:
+    question = _question_from_state(state)
+    tool_context = _format_tool_context(
+        dict(state.get("tool_results", {})),
+        dict(state.get("tool_errors", {})),
+    )
+    return [
+        SystemMessage(content=SYSTEM_PROMPT),
+        HumanMessage(
+            content=(
+                f"Câu hỏi người dùng:\n{question}\n\n"
+                f"{tool_context}\n\n"
+                "Hãy trả lời ngắn gọn, thực tế, bằng tiếng Việt. "
+                "Nếu một nguồn dữ liệu lỗi hoặc không có dữ liệu, hãy nêu rõ hạn chế."
+            )
+        ),
+    ]
+
+
+def _message_content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            str(block.get("text", ""))
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+    return str(content or "")
+
+
+async def stream_synthesize_answer(state: AgentState) -> AsyncIterator[str]:
+    """Stream the final Gemini answer, with fallback before the first token."""
+    question = _question_from_state(state)
+    tool_results = dict(state.get("tool_results", {}))
+    tool_errors = dict(state.get("tool_errors", {}))
+    emitted = False
+
+    try:
+        async for chunk in llm.astream(_synthesis_messages(state)):
+            content = _message_content_text(getattr(chunk, "content", ""))
+            if content:
+                emitted = True
+                yield content
+    except Exception:
+        if emitted:
+            raise
+        yield _fallback_answer(question, tool_results, tool_errors)
+
+
 async def route_intent_node(state: AgentState) -> AgentState:
     """Detect which tools are useful for the original question."""
     question = _question_from_state(state)
@@ -291,12 +351,16 @@ async def execute_tools_node(state: AgentState) -> AgentState:
     tool_errors: dict[str, str] = dict(state.get("tool_errors", {}))
     tool_messages: list[BaseMessage] = []
 
+    selected_tools: list[tuple[str, ToolRunner]] = []
     for intent in intents:
         runner = runners.get(intent)
-        if runner is None:
-            continue
+        if runner is not None:
+            selected_tools.append((intent, runner))
 
-        name, result, error = await _run_tool(intent, question, runner)
+    tool_outputs = await asyncio.gather(
+        *(_run_tool(intent, question, runner) for intent, runner in selected_tools)
+    )
+    for name, result, error in tool_outputs:
         if result is not None:
             tool_results[name] = result
             tool_messages.append(ToolMessage(content=result, tool_call_id=name))
@@ -315,23 +379,10 @@ async def synthesize_answer_node(state: AgentState) -> AgentState:
     question = _question_from_state(state)
     tool_results = dict(state.get("tool_results", {}))
     tool_errors = dict(state.get("tool_errors", {}))
-    tool_context = _format_tool_context(tool_results, tool_errors)
-
-    messages = [
-        SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(
-            content=(
-                f"Câu hỏi người dùng:\n{question}\n\n"
-                f"{tool_context}\n\n"
-                "Hãy trả lời ngắn gọn, thực tế, bằng tiếng Việt. "
-                "Nếu một nguồn dữ liệu lỗi hoặc không có dữ liệu, hãy nêu rõ hạn chế."
-            )
-        ),
-    ]
 
     try:
-        response = await llm.ainvoke(messages)
-        answer = str(getattr(response, "content", "") or "")
+        response = await llm.ainvoke(_synthesis_messages(state))
+        answer = _message_content_text(getattr(response, "content", ""))
     except Exception:
         answer = _fallback_answer(question, tool_results, tool_errors)
 
@@ -344,5 +395,6 @@ async def synthesize_answer_node(state: AgentState) -> AgentState:
 __all__ = [
     "execute_tools_node",
     "route_intent_node",
+    "stream_synthesize_answer",
     "synthesize_answer_node",
 ]
