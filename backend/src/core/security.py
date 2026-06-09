@@ -1,4 +1,5 @@
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
+from time import time
 from typing import Any
 from uuid import uuid4
 
@@ -33,14 +34,13 @@ def _create_token(
     token_type: str,
     expires_delta: timedelta,
 ) -> tuple[str, int]:
-    now = datetime.now(UTC)
-    expires_at = now + expires_delta
+    issued_at = int(time())
     expires_in = int(expires_delta.total_seconds())
     payload: dict[str, Any] = {
         "sub": str(user_id),
         "jti": str(uuid4()),
-        "iat": now,
-        "exp": expires_at,
+        "iat": issued_at,
+        "exp": issued_at + expires_in,
         "type": token_type,
     }
     token = jwt.encode(
@@ -103,4 +103,4 @@ def seconds_until_expiry(payload: dict[str, Any]) -> int:
     if not isinstance(exp, int):
         raise TokenError("Invalid token expiry")
 
-    return max(0, exp - int(datetime.now(UTC).timestamp()))
+    return max(0, exp - int(time()))

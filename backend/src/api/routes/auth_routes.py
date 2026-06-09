@@ -192,13 +192,6 @@ async def register(
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> UserModel:
     email = normalize_email(str(req.email))
-    existing_user = await _get_user_by_email(session, email)
-    if existing_user is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Email already registered",
-        )
-
     user = UserModel(
         name=req.name.strip(),
         email=email,

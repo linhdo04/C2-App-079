@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 from redis.exceptions import RedisError
+from sqlalchemy.exc import IntegrityError
 
 from api.dependencies import get_auth_redis, get_current_user
 from api.main import app
@@ -19,6 +20,7 @@ from core.security import (
     decode_access_token,
     decode_refresh_token,
     hash_password,
+    seconds_until_expiry,
     verify_password,
 )
 from infrastructure.database.postgres import get_session
@@ -36,11 +38,19 @@ class FakeResult:
 
 
 class FakeSession:
-    def __init__(self, users: list[UserModel] | None = None) -> None:
+    def __init__(
+        self,
+        users: list[UserModel] | None = None,
+        *,
+        fail_on_flush: bool = False,
+    ) -> None:
         self.users = users or []
         self.added_user: UserModel | None = None
+        self.execute_calls = 0
+        self.fail_on_flush = fail_on_flush
 
     async def execute(self, statement: Any) -> FakeResult:
+        self.execute_calls += 1
         statement_text = str(statement)
         statement_values = {
             str(value) for value in getattr(statement.compile(), "params", {}).values()
@@ -61,6 +71,12 @@ class FakeSession:
         self.users.append(user)
 
     async def flush(self) -> None:
+        if self.fail_on_flush:
+            raise IntegrityError(
+                "INSERT INTO users",
+                {},
+                Exception("duplicate email"),
+            )
         if self.added_user is not None and self.added_user.id is None:
             self.added_user.id = 1
 
@@ -162,6 +178,28 @@ def test_refresh_token_round_trip() -> None:
     assert payload["sub"] == "1"
     assert payload["type"] == "refresh"
     assert "jti" in payload
+
+
+def test_token_expiry_uses_consistent_numeric_timestamps() -> None:
+    token, expires_in = create_access_token(1)
+    payload = jwt.decode(
+        token,
+        settings.jwt_secret_key,
+        algorithms=[settings.jwt_algorithm],
+    )
+
+    assert isinstance(payload["iat"], int)
+    assert isinstance(payload["exp"], int)
+    assert payload["exp"] - payload["iat"] == expires_in
+
+
+def test_seconds_until_expiry_uses_epoch_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("core.security.time", lambda: 1_000.9)
+
+    assert seconds_until_expiry({"exp": 1_100}) == 100
+    assert seconds_until_expiry({"exp": 900}) == 0
 
 
 def test_decoders_reject_wrong_token_type() -> None:
@@ -377,10 +415,12 @@ async def test_register_success_normalizes_email_and_hides_password_hash() -> No
 
 @pytest.mark.asyncio
 async def test_register_duplicate_email_returns_409() -> None:
+    session = FakeSession(fail_on_flush=True)
+
     response = await request(
         "POST",
         "/auth/register",
-        session=FakeSession([user_factory(email="user@example.com")]),
+        session=session,
         json={
             "name": "User",
             "email": "user@example.com",
@@ -389,6 +429,7 @@ async def test_register_duplicate_email_returns_409() -> None:
     )
 
     assert response.status_code == 409
+    assert session.execute_calls == 0
 
 
 @pytest.mark.asyncio
