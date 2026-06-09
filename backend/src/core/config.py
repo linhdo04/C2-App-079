@@ -19,6 +19,9 @@ class Settings(BaseSettings):
         alias="APP_ENV", default="production"
     )
     app_debug: bool = Field(alias="APP_DEBUG", default=False)
+    frontend_origin: str = Field(
+        alias="FRONTEND_ORIGIN", default="http://localhost:3030"
+    )
 
     api_host: str = Field(alias="API_HOST")
     api_port: int = Field(alias="API_PORT")
@@ -37,6 +40,15 @@ class Settings(BaseSettings):
     redis_host: str = Field(alias="REDIS_HOST")
     redis_port: int = Field(alias="REDIS_PORT")
     redis_password: str | None = Field(alias="REDIS_PASSWORD", default=None)
+
+    jwt_secret_key: str = Field(alias="JWT_SECRET_KEY")
+    jwt_algorithm: str = Field(alias="JWT_ALGORITHM", default="HS256")
+    access_token_expire_minutes: int = Field(
+        alias="ACCESS_TOKEN_EXPIRE_MINUTES", default=60
+    )
+    refresh_token_expire_days: int = Field(
+        alias="REFRESH_TOKEN_EXPIRE_DAYS", default=30
+    )
 
     @property
     def database_url(self) -> str:
