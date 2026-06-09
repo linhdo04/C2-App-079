@@ -13,6 +13,7 @@ from api.routes.agent_routes import (
     create_chat_message,
     delete_chat,
     list_chats,
+    stream_chat_message,
 )
 from models.chat_history import ChatRole
 from models.chat_session import ChatSessionModel
@@ -39,6 +40,8 @@ class FakeSession:
         self.added: list[Any] = []
         self.next_id = 1
         self.statements: list[Any] = []
+        self.rollback_count = 0
+        self.committed = False
 
     async def execute(self, statement: Any) -> FakeScalarResult:
         self.statements.append(statement)
@@ -60,6 +63,12 @@ class FakeSession:
     async def refresh(self, value: Any) -> None:
         return None
 
+    async def rollback(self) -> None:
+        self.rollback_count += 1
+
+    async def commit(self) -> None:
+        self.committed = True
+
 
 def user_factory(user_id: int = 7) -> UserModel:
     return UserModel(
@@ -68,6 +77,12 @@ def user_factory(user_id: int = 7) -> UserModel:
         email="user@example.com",
         password_hash="hash",
     )
+
+
+def response_chunk_text(chunk: str | bytes | memoryview[int]) -> str:
+    if isinstance(chunk, str):
+        return chunk
+    return bytes(chunk).decode()
 
 
 @pytest.mark.asyncio
@@ -168,6 +183,83 @@ async def test_create_chat_message_does_not_persist_partial_history_on_agent_err
         )
 
     assert exc_info.value.status_code == 500
+    assert session.added == []
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_message_emits_tokens_and_persists_done_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chat = ChatSessionModel(id=10, user_id=7, title="Cuộc trò chuyện mới")
+    session = FakeSession([chat, chat])
+
+    async def fake_stream_agent(question: str) -> Any:
+        assert question == "Tư vấn lúa"
+        yield {
+            "event": "status",
+            "phase": "routing",
+            "message": "Đang phân tích yêu cầu...",
+        }
+        yield {"event": "token", "content": "Xin "}
+        yield {"event": "token", "content": "chào"}
+
+    monkeypatch.setattr(
+        "api.routes.agent_routes.stream_agent",
+        fake_stream_agent,
+    )
+
+    response = await stream_chat_message(
+        10,
+        AskRequest(question="Tư vấn lúa"),
+        user_factory(),
+        session,  # type: ignore[arg-type]
+    )
+    chunks = [response_chunk_text(chunk) async for chunk in response.body_iterator]
+    body = "".join(chunks)
+
+    assert (
+        'event: status\ndata: {"phase": "routing", '
+        '"message": "Đang phân tích yêu cầu..."}'
+    ) in body
+    assert 'event: token\ndata: {"content": "Xin "}' in body
+    assert 'event: token\ndata: {"content": "chào"}' in body
+    assert "event: done" in body
+    assert '"message": "Xin chào"' in body
+    assert session.rollback_count == 1
+    assert session.committed is True
+    assert "FOR UPDATE" in str(session.statements[1])
+    assert session.statements[1].get_execution_options()["populate_existing"] is True
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_message_rolls_back_and_emits_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chat = ChatSessionModel(id=10, user_id=7, title="Cuộc trò chuyện mới")
+    session = FakeSession([chat])
+
+    async def failing_stream_agent(question: str) -> Any:
+        if False:
+            yield ""
+        raise RuntimeError("stream unavailable")
+
+    monkeypatch.setattr(
+        "api.routes.agent_routes.stream_agent",
+        failing_stream_agent,
+    )
+
+    response = await stream_chat_message(
+        10,
+        AskRequest(question="Tư vấn lúa"),
+        user_factory(),
+        session,  # type: ignore[arg-type]
+    )
+    chunks = [response_chunk_text(chunk) async for chunk in response.body_iterator]
+    body = "".join(chunks)
+
+    assert "event: error" in body
+    assert "stream unavailable" in body
+    assert session.rollback_count == 2
     assert session.added == []
 
 

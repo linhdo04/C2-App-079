@@ -47,13 +47,57 @@ dần.
 ### POST /agent/chats/{chat_id}/messages
 
 Gửi câu hỏi, chạy agent và lưu cả user message lẫn assistant message. Chat mặc
-định được đổi tên theo câu hỏi đầu tiên.
+định được đổi tên theo câu hỏi đầu tiên. Endpoint này trả JSON hoàn chỉnh và
+được giữ để tương thích.
 
 ```json
 {
   "question": "Tuần này nên điều chỉnh lịch phun thuốc thế nào?"
 }
 ```
+
+### POST /agent/chats/{chat_id}/messages/stream
+
+Gửi cùng request body như endpoint message thường nhưng trả
+`Content-Type: text/event-stream`.
+
+Status event:
+
+```text
+event: status
+data: {"phase":"routing","message":"Đang phân tích yêu cầu..."}
+```
+
+Khi chạy tool, payload có thêm tên tool:
+
+```text
+event: status
+data: {"phase":"tool","tool":"weather","message":"Đang lấy dữ liệu thời tiết..."}
+```
+
+Token event:
+
+```text
+event: token
+data: {"content":"Theo "}
+```
+
+Khi câu trả lời đã được lưu:
+
+```text
+event: done
+data: {"chat":{...},"user_message":{...},"assistant_message":{...}}
+```
+
+Nếu lỗi xảy ra sau khi stream bắt đầu:
+
+```text
+event: error
+data: {"detail":"..."}
+```
+
+Backend chỉ lưu lịch sử sau khi nhận đầy đủ câu trả lời. Nếu stream hoặc thao
+tác database lỗi, transaction được rollback.
 
 ### DELETE /agent/chats/{chat_id}
 

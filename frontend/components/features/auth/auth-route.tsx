@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { useCurrentUserQuery, useLoginMutation, useRegisterMutation } from "@/lib/api-hooks";
-import { readSession, saveSession } from "@/lib/auth-client";
+import { hasAuthSession, saveSession } from "@/lib/auth-client";
 import { useAuthStore } from "@/lib/auth-store";
 import type { AuthFormValues } from "@/lib/validation";
 import type { AuthMode } from "@/types/auth";
@@ -25,38 +25,37 @@ export function AuthRoute({ mode }: AuthRouteProps) {
   const queryClient = useQueryClient();
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const { clearAuth, session, setBooting, setSession, setUser } = useAuthStore();
-  const currentUserQuery = useCurrentUserQuery(session);
+  const { authStatus, clearAuth, setAuthenticated, setBooting, setUser } = useAuthStore();
+  const isAuthenticated = authStatus === "authenticated";
+  const currentUserQuery = useCurrentUserQuery(isAuthenticated);
   const registerMutation = useRegisterMutation();
   const loginMutation = useLoginMutation();
   const isLoading = registerMutation.isPending || loginMutation.isPending;
-  const isCheckingSession = session !== null && currentUserQuery.isFetching;
+  const isCheckingSession = isAuthenticated && currentUserQuery.isFetching;
   const alternateMode = mode === "login" ? "register" : "login";
 
   useEffect(() => {
-    const storedSession = readSession();
-    if (storedSession === null) {
+    if (!hasAuthSession()) {
       clearAuth();
       setBooting(false);
       return;
     }
 
-    setSession(storedSession);
-  }, [clearAuth, setBooting, setSession]);
+    setAuthenticated(true);
+  }, [clearAuth, setAuthenticated, setBooting]);
 
   useEffect(() => {
     if (currentUserQuery.data === undefined) {
       return;
     }
 
-    setSession(currentUserQuery.data.session);
-    setUser(currentUserQuery.data.data);
+    setUser(currentUserQuery.data);
     setBooting(false);
     router.replace("/agent");
-  }, [currentUserQuery.data, router, setBooting, setSession, setUser]);
+  }, [currentUserQuery.data, router, setBooting, setUser]);
 
   useEffect(() => {
-    if (session === null || currentUserQuery.error === null) {
+    if (!isAuthenticated || currentUserQuery.error === null) {
       return;
     }
 
@@ -70,7 +69,7 @@ export function AuthRoute({ mode }: AuthRouteProps) {
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [clearAuth, currentUserQuery.error, queryClient, session, setBooting]);
+  }, [clearAuth, currentUserQuery.error, isAuthenticated, queryClient, setBooting]);
 
   async function handleSubmit(values: AuthFormValues) {
     setError("");
@@ -89,8 +88,9 @@ export function AuthRoute({ mode }: AuthRouteProps) {
         email: values.email,
         password: values.password,
       });
-      const nextSession = saveSession(tokenResponse);
-      setSession(nextSession);
+      saveSession(tokenResponse);
+      queryClient.removeQueries({ queryKey: ["auth"] });
+      setAuthenticated(true);
       setMessage(mode === "register" ? "Tài khoản đã được tạo. Đang mở workspace..." : "Đăng nhập thành công.");
     } catch (apiError) {
       setError(apiError instanceof Error ? apiError.message : "Không thể xử lý yêu cầu. Vui lòng thử lại.");

@@ -39,9 +39,9 @@ Các tool hiện có:
   trường hợp khác mặc định dùng `Hanoi`.
 - `analyze_crop_data` chỉ trích xuất dữ liệu rất đơn giản từ câu hỏi, chưa có
   parser mùa vụ phức tạp.
-- API lưu lịch sử hỏi đáp theo từng cuộc trò chuyện. Graph vẫn xử lý câu hỏi
-  hiện tại độc lập, chưa đưa các lượt trước vào context của LLM và chưa hỗ trợ
-  streaming hoặc memory.
+- API lưu lịch sử hỏi đáp theo từng cuộc trò chuyện và hỗ trợ streaming câu trả
+  lời cuối qua SSE. Graph vẫn xử lý câu hỏi hiện tại độc lập, chưa đưa các lượt
+  trước vào context của LLM và chưa hỗ trợ memory.
 - Nếu một tool phụ lỗi, agent lưu lỗi vào state và vẫn cố tổng hợp bằng dữ liệu
   còn lại. Nếu Gemini lỗi, agent trả fallback từ tool results.
 
