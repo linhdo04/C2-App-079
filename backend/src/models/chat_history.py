@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Column
+from sqlalchemy import JSON, Column, DateTime
 from sqlmodel import Field
 
 from .base import BaseModel, get_utc_now
@@ -20,4 +20,7 @@ class ChatHistoryModel(BaseModel, table=True):
         default=None,
         sa_column=Column("metadata", JSON, nullable=True),
     )
-    timestamp: datetime = Field(default_factory=get_utc_now, nullable=False)
+    timestamp: datetime = Field(
+        default_factory=get_utc_now,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )

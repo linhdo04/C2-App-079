@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     )
     app_debug: bool = Field(alias="APP_DEBUG", default=False)
     frontend_origin: str = Field(
-        alias="FRONTEND_ORIGIN", default="http://localhost:3030"
+        alias="FRONTEND_ORIGIN", default="http://localhost:3000"
     )
 
     api_host: str = Field(alias="API_HOST")
@@ -63,6 +63,14 @@ class Settings(BaseSettings):
     @property
     def redis_url(self) -> str:
         return f"redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}"
+
+    @property
+    def frontend_origins(self) -> list[str]:
+        return [
+            origin.strip().rstrip("/")
+            for origin in self.frontend_origin.split(",")
+            if origin.strip()
+        ]
 
 
 settings = Settings()  # type: ignore[call-arg]

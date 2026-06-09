@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, Column
+from sqlalchemy import JSON, Column, DateTime
 from sqlmodel import Field
 
 from .base import BaseModel
@@ -20,4 +20,7 @@ class ReportModel(BaseModel, table=True):
         default=None,
         sa_column=Column("attachments", JSON, nullable=True),
     )
-    published_at: datetime | None = Field(default=None)
+    published_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
