@@ -1,5 +1,8 @@
 # Auth API
 
+Các endpoint bên dưới nằm dưới `API_PREFIX`. Với `API_PREFIX=/api`,
+`POST /auth/login` có URL đầy đủ là `POST /api/auth/login`.
+
 Backend dùng JWT Bearer access token cho các API không public. Login cấp thêm
 rotating refresh token qua HttpOnly cookie để lấy access token mới mà không cần
 gửi lại mật khẩu.
@@ -53,7 +56,8 @@ Response:
 ```
 
 Response cũng set cookie `refresh_token=<jwt>` với `HttpOnly`,
-`SameSite=Lax`, `Path=/auth` và `Max-Age` bằng `refresh_expires_in`.
+`SameSite=Lax`, `Path=<API_PREFIX>/auth` và `Max-Age` bằng
+`refresh_expires_in`.
 
 ### POST /auth/token
 

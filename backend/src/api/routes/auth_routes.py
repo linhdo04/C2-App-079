@@ -33,7 +33,7 @@ from models.user import UserModel
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 REFRESH_COOKIE_NAME = "refresh_token"
-REFRESH_COOKIE_PATH = "/auth"
+REFRESH_COOKIE_PATH = f"{settings.api_prefix}/auth"
 
 
 class UserPublic(BaseModel):

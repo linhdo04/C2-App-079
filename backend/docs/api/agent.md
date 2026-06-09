@@ -1,66 +1,70 @@
 # Agent API
 
-API này cho phép client gửi một câu hỏi độc lập tới AI Agent và nhận lại câu
-trả lời dạng chuỗi.
+Các endpoint bên dưới nằm dưới `API_PREFIX`. Với `API_PREFIX=/api`,
+`POST /agent/ask` có URL đầy đủ là `POST /api/agent/ask`. Endpoint yêu cầu JWT
+Bearer token và dữ liệu chat luôn được lọc theo user đang đăng nhập.
 
-Endpoint yêu cầu JWT Bearer token trong header `Authorization`.
-
-Implementation chi tiết của agent nằm trong [`docs/agent/`](../agent/README.md).
-
-## Endpoint
+## Hỏi độc lập
 
 ### POST /agent/ask
 
-Gửi câu hỏi cho agent.
-
-**Request body:**
-
 ```json
 {
-  "question": "string"
+  "question": "Dự báo thời tiết ở Hà Nội"
 }
-```
-
-**Response 200:**
-
-```json
-{
-  "answer": "string"
-}
-```
-
-**Errors:**
-
-- `500 Internal Server Error`: lỗi không mong muốn từ agent. Lỗi từ tool phụ như
-  Tavily hoặc Open-Meteo được agent cố gắng fallback mềm khi còn dữ liệu khác.
-- `401 Unauthorized`: thiếu hoặc sai Bearer token.
-
-## Ví dụ
-
-```bash
-curl -X POST http://localhost:8000/agent/ask \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <access_token>" \
-  -d '{"question": "Dự báo thời tiết ở Hà Nội"}'
 ```
 
 Response:
 
 ```json
 {
-  "answer": "Theo dữ liệu thời tiết hiện có, Hà Nội..."
+  "answer": "Theo dữ liệu thời tiết hiện có..."
 }
 ```
 
-## Ghi chú implementation
+## Quản lý chat
 
-- Route gọi `run_agent(question)` trong `backend/src/agent/agent.py`.
-- Graph hiện route intent, chạy tool phù hợp và dùng Gemini tổng hợp câu trả lời.
-- Response ưu tiên `answer` trong graph state.
-- API hiện chưa hỗ trợ conversation history, streaming hoặc session memory.
+### POST /agent/chats
 
-Xem thêm:
+Tạo chat mới. Body có thể rỗng hoặc chứa `title`.
 
-- [Tổng quan agent](../agent/README.md)
-- [Kiến trúc agent](../agent/architecture.md)
-- [Agent tools](../agent/tools.md)
+```json
+{
+  "title": "Kế hoạch vụ hè thu"
+}
+```
+
+### GET /agent/chats
+
+Trả danh sách chat mới cập nhật trước. Dùng `?search=lúa` để tìm không phân biệt
+hoa thường trong cả tiêu đề và nội dung message.
+
+### GET /agent/chats/{chat_id}
+
+Trả thông tin chat và toàn bộ message chưa bị xoá, theo thứ tự thời gian tăng
+dần.
+
+### POST /agent/chats/{chat_id}/messages
+
+Gửi câu hỏi, chạy agent và lưu cả user message lẫn assistant message. Chat mặc
+định được đổi tên theo câu hỏi đầu tiên.
+
+```json
+{
+  "question": "Tuần này nên điều chỉnh lịch phun thuốc thế nào?"
+}
+```
+
+### DELETE /agent/chats/{chat_id}
+
+Soft-delete chat và trả `204 No Content`.
+
+## Errors
+
+- `401 Unauthorized`: token thiếu, sai hoặc hết hạn.
+- `404 Not Found`: chat không tồn tại, đã xoá hoặc không thuộc current user.
+- `422 Unprocessable Entity`: request không hợp lệ.
+- `500 Internal Server Error`: agent không thể tạo câu trả lời.
+
+Graph hiện vẫn xử lý riêng câu hỏi mới nhất. Lịch sử chat được lưu và hiển thị
+nhưng chưa được đưa vào context của LLM.

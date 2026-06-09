@@ -41,6 +41,12 @@ class ChatHistoryModel(BaseModel, table=True):
         nullable=True,
         index=True,
     )
+    chat_session_id: int | None = Field(
+        default=None,
+        foreign_key="chat_sessions.id",
+        nullable=True,
+        index=True,
+    )
     role: ChatRole = Field(
         default=ChatRole.USER,
         sa_type=String,

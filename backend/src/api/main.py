@@ -2,7 +2,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 import structlog
-from fastapi import Depends, FastAPI
+from fastapi import APIRouter, Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from core import settings, setup_logging
@@ -37,6 +37,12 @@ app.add_middleware(
     ip_window=60,
     key_limit=600,
     key_window=60,
+    exclude_paths={
+        f"{settings.api_prefix}/health",
+        "/metrics",
+        "/docs",
+        "/openapi.json",
+    },
 )
 app.add_middleware(error_handling.ErrorHandlingMiddleware, debug=settings.app_debug)
 app.add_middleware(
@@ -47,10 +53,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth_router)
-app.include_router(agent_router, dependencies=[Depends(get_current_user)])
+api_router = APIRouter(prefix=settings.api_prefix)
+api_router.include_router(auth_router)
+api_router.include_router(
+    agent_router,
+    dependencies=[Depends(get_current_user)],
+)
 
 
-@app.get("/", dependencies=[Depends(get_current_user)])
-def read_root() -> dict[str, str]:
-    return {"message": "Hello, FastAPI with Uvicorn!"}
+@api_router.get("/health", tags=["health"])
+def health_check() -> dict[str, str]:
+    return {"status": "healthy"}
+
+
+app.include_router(api_router)

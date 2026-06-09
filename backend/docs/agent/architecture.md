@@ -4,8 +4,10 @@
 
 ### API route
 
-`backend/src/api/routes/agent_routes.py` khai báo `POST /agent/ask`. Route nhận
-`question`, gọi `run_agent()` và trả về JSON `{"answer": "..."}`.
+`backend/src/api/routes/agent_routes.py` khai báo endpoint hỏi độc lập
+`POST /agent/ask` và các endpoint quản lý cuộc trò chuyện dưới
+`/agent/chats`. Khi gửi message trong một chat, route gọi `run_agent()` rồi lưu
+cả câu hỏi và câu trả lời vào `chat_histories`.
 
 ### Agent entry point
 
@@ -87,6 +89,19 @@ POST /agent/ask
   -> synthesize_answer
   -> {"answer": state["answer"]}
 ```
+
+Luồng chat có lịch sử:
+
+```text
+POST /agent/chats/{chat_id}/messages
+  -> kiểm tra chat thuộc current user
+  -> run_agent(question)
+  -> lưu user message + assistant message
+  -> cập nhật title và updated_at của chat
+```
+
+Lịch sử hiện là persistence và UI history. Các message cũ chưa được truyền vào
+`AgentState`, vì vậy graph và prompt không thay đổi.
 
 ## Phụ thuộc bên ngoài
 
