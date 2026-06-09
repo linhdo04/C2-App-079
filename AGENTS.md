@@ -170,14 +170,63 @@ Do not redesign the agent architecture unless explicitly requested.
 
 ---
 
-## Frontend Rules
+## Next.js 16 App Router Rules
 
-### Code Location
+### Server Components by default
 
-Frontend application code belongs in:
+- Components are Server Components by default.
+- Do not add `"use client"` unless required.
+- Use Client Components only for:
+  - local state
+  - event handlers
+  - browser APIs
+  - effects
+  - interactive UI
+
+### Route file responsibilities
+
+Route files should stay thin.
+
+Allowed in `page.tsx`:
+
+- route-level composition
+- async data fetching
+- metadata
+- passing props to components
+
+Avoid in `page.tsx`:
+
+- large JSX sections
+- complex forms
+- charts
+- tables
+- reusable cards
+- client-side state
+- event handlers
+
+If `page.tsx` exceeds ~150 lines, extract components.
+
+### Recommended structure
 
 ```text
 frontend/
+├── app/
+│   ├── layout.tsx
+│   ├── page.tsx
+│   ├── loading.tsx
+│   ├── error.tsx
+│   └── ...
+├── components/
+│   ├── ui/
+│   ├── layout/
+│   └── features/
+│       ├── missions/
+│       ├── telemetry/
+│       ├── coverage/
+│       └── agent/
+├── hooks/
+├── lib/
+└── types/
 ```
 
 ### Development Rules

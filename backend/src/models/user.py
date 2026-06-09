@@ -8,3 +8,4 @@ class UserModel(BaseModel, table=True):
 
     name: str = Field(nullable=False)
     email: str = Field(unique=True, nullable=False)
+    password_hash: str = Field(nullable=False)
