@@ -6,6 +6,7 @@ from sqlalchemy import CheckConstraint
 
 from models import (
     ChatHistoryModel,
+    ChatSessionModel,
     CoverageResultModel,
     FlightPathModel,
     IoTNodeModel,
@@ -87,7 +88,12 @@ def test_foreign_keys_and_time_series_queries_are_indexed() -> None:
         ChatHistoryModel: {
             "ix_chat_histories_mission_id",
             "ix_chat_histories_user_id",
+            "ix_chat_histories_chat_session_id",
             "ix_chat_histories_mission_id_timestamp",
+        },
+        ChatSessionModel: {
+            "ix_chat_sessions_user_id",
+            "ix_chat_sessions_user_id_updated_at",
         },
         FlightPathModel: {"ix_flight_paths_mission_id"},
         IoTNodeModel: {"ix_iot_nodes_mission_id"},

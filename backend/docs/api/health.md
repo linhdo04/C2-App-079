@@ -1,11 +1,16 @@
-# Health / Root Endpoint
+# Health Check API
 
-GET /
+## GET /health
 
-Response (200):
+Endpoint public dùng cho load balancer và hệ thống giám sát. Endpoint nằm dưới
+`API_PREFIX`; với `API_PREFIX=/api`, URL đầy đủ là `GET /api/health`.
+
+Response `200`:
 
 ```json
 {
-  "message": "Hello, FastAPI with Uvicorn!"
+  "status": "healthy"
 }
 ```
+
+Health check không yêu cầu Bearer token và được loại khỏi rate limiting.
