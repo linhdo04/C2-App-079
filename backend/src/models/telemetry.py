@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, Column
+from sqlalchemy import JSON, Column, DateTime
 from sqlmodel import Field
 
 from .base import BaseModel, get_utc_now
@@ -10,7 +10,10 @@ class TelemetryModel(BaseModel, table=True):
     __tablename__ = "telemetry"
 
     iot_node_id: int = Field(foreign_key="iot_nodes.id", nullable=False)
-    timestamp: datetime = Field(default_factory=get_utc_now, nullable=False)
+    timestamp: datetime = Field(
+        default_factory=get_utc_now,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
     latitude: float | None = Field(default=None)
     longitude: float | None = Field(default=None)
     altitude: float | None = Field(default=None)

@@ -12,6 +12,29 @@ This repository contains:
 
 ---
 
+## Project Command Rules
+
+Prefer project-defined commands over raw tool commands.
+
+Use Makefile scripts for backend tasks.
+
+Examples:
+
+- Use `make format`, not raw `ruff format .`
+- Use `make lint`, not raw `ruff check . --fix`
+- Use `make lint-check`, not raw `ruff check .`
+- Use `make typecheck`, not raw `mypy .`
+- Use `make test`, not raw `pytest`
+- Use `make check`, not separate manual checks when full verification is needed
+- Use `make db-migrate m="name"`, not manually creating migration files
+- Use `make db-upgrade`, not raw migration edits
+
+Raw tool commands are allowed only when:
+
+- no Makefile command exists
+- debugging a tool-specific issue
+- explicitly requested
+
 ## General Rules
 
 - Follow the existing project architecture.
@@ -119,6 +142,8 @@ Never remove tests to make CI pass.
 - Do not edit historical migrations.
 - Create a new migration when schema changes are necessary.
 - Keep models, migrations, and tests synchronized.
+- Never hand-write a migration file unless explicitly instructed.
+- Never bypass the Makefile command when a Makefile command exists.
 
 If schema changes are introduced:
 
@@ -332,6 +357,14 @@ cd backend
 make format
 make lint
 make check
+```
+
+Before committing frontend changes:
+
+```bash
+cd backend
+bun format:fix && bun format:check
+bun lint:check
 ```
 
 All commands must pass.

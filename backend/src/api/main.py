@@ -30,13 +30,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 app = FastAPI(lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[settings.frontend_origin],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 app.add_middleware(logging.RequestLoggingMiddleware)
 app.add_middleware(
     rate_limiting.RateLimitMiddleware,
@@ -46,6 +39,13 @@ app.add_middleware(
     key_window=60,
 )
 app.add_middleware(error_handling.ErrorHandlingMiddleware, debug=settings.app_debug)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.frontend_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(auth_router)
 app.include_router(agent_router, dependencies=[Depends(get_current_user)])

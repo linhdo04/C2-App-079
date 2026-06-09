@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Column
+from sqlalchemy import JSON, Column, DateTime
 from sqlmodel import Field
 
 from .base import BaseModel
@@ -18,7 +18,10 @@ class IoTNodeModel(BaseModel, table=True):
     )
     latitude: float | None = Field(default=None)
     longitude: float | None = Field(default=None)
-    last_seen: datetime | None = Field(default=None)
+    last_seen: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
     node_metadata: dict[str, Any] | None = Field(
         default=None, sa_column=Column("metadata", JSON, nullable=True)
     )
