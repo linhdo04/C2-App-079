@@ -59,20 +59,38 @@ class ChatMessageResponse(BaseModel):
     assistant_message: ChatMessagePublic
 
 
-def _active_chat_statement(chat_id: int, user_id: int) -> Any:
-    return select(ChatSessionModel).where(
+def _active_chat_statement(
+    chat_id: int,
+    user_id: int,
+    *,
+    for_update: bool = False,
+) -> Any:
+    statement = select(ChatSessionModel).where(
         cast(ColumnElement[bool], ChatSessionModel.id == chat_id),
         cast(ColumnElement[bool], ChatSessionModel.user_id == user_id),
         cast(ColumnElement[bool], cast(Any, ChatSessionModel.deleted_at).is_(None)),
     )
+    if for_update:
+        statement = statement.with_for_update().execution_options(
+            populate_existing=True
+        )
+    return statement
 
 
 async def _get_active_chat(
     session: AsyncSession,
     chat_id: int,
     user_id: int,
+    *,
+    for_update: bool = False,
 ) -> ChatSessionModel:
-    result = await session.execute(_active_chat_statement(chat_id, user_id))
+    result = await session.execute(
+        _active_chat_statement(
+            chat_id,
+            user_id,
+            for_update=for_update,
+        )
+    )
     chat = cast(ChatSessionModel | None, result.scalar_one_or_none())
     if chat is None:
         raise HTTPException(
@@ -243,6 +261,12 @@ async def create_chat_message(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    chat = await _get_active_chat(
+        session,
+        chat_id,
+        current_user.id,
+        for_update=True,
+    )
     now = get_utc_now()
     user_message = ChatHistoryModel(
         user_id=current_user.id,

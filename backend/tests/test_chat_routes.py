@@ -123,7 +123,7 @@ async def test_create_chat_message_saves_question_and_answer(
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )
-    session = FakeSession([chat])
+    session = FakeSession([chat, chat])
 
     async def fake_run_agent(question: str) -> str:
         assert question == "Dự báo thời tiết Hà Nội"
@@ -143,6 +143,8 @@ async def test_create_chat_message_saves_question_and_answer(
     assert response.user_message.message == "Dự báo thời tiết Hà Nội"
     assert response.assistant_message.role == ChatRole.ASSISTANT
     assert response.assistant_message.message == "Trời có mưa nhẹ."
+    assert "FOR UPDATE" in str(session.statements[1])
+    assert session.statements[1].get_execution_options()["populate_existing"] is True
 
 
 @pytest.mark.asyncio
