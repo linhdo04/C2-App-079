@@ -20,3 +20,5 @@ build/
 
 /data
 checkpoints/
+.idea/
+.vscode/
