@@ -238,8 +238,12 @@ Các bảng hiện có:
 
 Operational notes:
 
-- `TelemetryModel` is likely the highest-volume table; add indexes and retention
-  policy before production ingestion grows.
+- Foreign keys are indexed, and telemetry/chat history include composite indexes
+  for parent-and-timestamp queries.
+- Domain ranges and finite status/role values are enforced by both model
+  validation and database check constraints.
+- `TelemetryModel` is likely the highest-volume table; add a retention policy
+  before production ingestion grows.
 - `deleted_at` enables soft delete semantics, but no repository/query helper
   currently enforces filtering deleted records.
 - JSON fields provide flexibility but need validation at service boundaries.
