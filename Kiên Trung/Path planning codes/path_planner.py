@@ -58,9 +58,10 @@ _COLOUR = {
 
 @dataclass
 class Waypoint:
-    x:         float  # pixel column
-    y:         float  # pixel row
-    sweep_idx: int    # sweep line index this point belongs to
+    x:          float  # pixel column
+    y:          float  # pixel row
+    sweep_idx:  int    # sweep line index this point belongs to
+    is_transit: bool = False  # True → repositioning move TO this point (not a coverage sweep)
 
 
 class RotatingCalipersPlanner:
@@ -130,8 +131,9 @@ class RotatingCalipersPlanner:
 
         if waypoints:
             pts = [(int(wp.x), int(wp.y)) for wp in waypoints]
-            for a, b in zip(pts, pts[1:]):
-                cv2.line(canvas, a, b, (0, 255, 255), 1, cv2.LINE_AA)
+            for i, (a, b) in enumerate(zip(pts, pts[1:])):
+                colour = (0, 140, 255) if waypoints[i + 1].is_transit else (0, 255, 255)
+                cv2.line(canvas, a, b, colour, 1, cv2.LINE_AA)
             for pt in pts:
                 cv2.circle(canvas, pt, 2, (0, 0, 255), -1)
             cv2.circle(canvas, pts[0],  6, (0, 255, 0),   -1)   # start  — green
@@ -252,10 +254,15 @@ class RotatingCalipersPlanner:
                         dtype=np.float32).reshape(1, -1, 2)
         back = cv2.transform(src, M_inv).reshape(-1, 2)
 
-        return [
+        wps = [
             Waypoint(float(back[i, 0]), float(back[i, 1]), raw[i][2])
             for i in range(len(raw))
         ]
+        # First point of each new sweep is a transit (repositioning from previous sweep end)
+        for i in range(1, len(wps)):
+            if wps[i].sweep_idx != wps[i - 1].sweep_idx:
+                wps[i].is_transit = True
+        return wps
 
 
 # ── BECD ──────────────────────────────────────────────────────────────────────
@@ -329,8 +336,9 @@ class BECDPlanner:
 
         if waypoints:
             pts = [(int(wp.x), int(wp.y)) for wp in waypoints]
-            for a, b in zip(pts, pts[1:]):
-                cv2.line(canvas, a, b, (0, 255, 255), 1, cv2.LINE_AA)
+            for i, (a, b) in enumerate(zip(pts, pts[1:])):
+                colour = (0, 140, 255) if waypoints[i + 1].is_transit else (0, 255, 255)
+                cv2.line(canvas, a, b, colour, 1, cv2.LINE_AA)
             for pt in pts:
                 cv2.circle(canvas, pt, 2, (0, 0, 255), -1)
             cv2.circle(canvas, pts[0],  6, (0, 255, 0),   -1)
@@ -486,10 +494,16 @@ class BECDPlanner:
             ordered.append((nxt_idx, nxt_seg))
 
         all_raw: List[Tuple[float, float, int]] = []
-        for _, seg in ordered:
+        transit_indices: set = set()
+        for i, (_, seg) in enumerate(ordered):
+            if i > 0 and seg:
+                transit_indices.add(len(all_raw))  # first point of each non-first cell is transit arrival
             all_raw.extend(seg)
 
-        return [Waypoint(x, y, s) for x, y, s in all_raw]
+        return [
+            Waypoint(x, y, s, is_transit=(idx in transit_indices))
+            for idx, (x, y, s) in enumerate(all_raw)
+        ]
 
 
 # ── Utility ───────────────────────────────────────────────────────────────────

@@ -2,7 +2,7 @@
 Training Script — U-Net + ResNet34 for Agricultural Land Segmentation
 ======================================================================
 Dataset : LandCover.ai (preprocessed by preprocess.py)
-Model   : U-Net with ResNet50 encoder (pretrained on ImageNet)
+Model   : U-Net with ResNet34 encoder (pretrained on ImageNet)
 Loss    : CE (weighted) + DiceLoss + FocalLoss (handles class imbalance)
 Metrics : IoU per class + mean IoU
 
@@ -161,7 +161,7 @@ def build_model(num_classes: int = NUM_CLASSES) -> nn.Module:
         raise ImportError("pip install segmentation-models-pytorch")
 
     model = smp.Unet(
-        encoder_name    = "resnet50",
+        encoder_name    = "resnet34",
         encoder_weights = "imagenet",
         in_channels     = 3,
         classes         = num_classes,
