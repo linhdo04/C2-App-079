@@ -1,10 +1,13 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
+import { Activity, Radar } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AgentQuestionPanel } from "@/components/features/agent/agent-question-panel";
-import { SessionPanel } from "@/components/features/agent/session-panel";
+import { SessionPanel } from "@/components/features/auth/session-panel";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Spinner } from "@/components/ui/spinner";
 import { useAgentAskMutation, useCurrentUserQuery, useLogoutMutation } from "@/lib/api-hooks";
 import { ApiError } from "@/lib/api-client";
 import { formatTimeLeft, readSession, sessionTimeLeft } from "@/lib/auth-client";
@@ -128,55 +131,75 @@ export function AgentWorkspace() {
 
   if (isBooting) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-[#f7f4ef] px-4 text-[#1b1f1d]">
-        <p className="text-sm font-medium">Đang kiểm tra phiên đăng nhập...</p>
+      <main className="app-shell flex min-h-screen items-center justify-center px-4 text-foreground">
+        <p className="flex items-center gap-2 text-sm font-medium">
+          <Spinner />
+          Đang kiểm tra phiên đăng nhập...
+        </p>
       </main>
     );
   }
 
   if (session !== null && user === null) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-[#f7f4ef] px-4 text-[#1b1f1d]">
-        <p className="text-sm font-medium">Đang tải hồ sơ người dùng...</p>
+      <main className="app-shell flex min-h-screen items-center justify-center px-4 text-foreground">
+        <p className="flex items-center gap-2 text-sm font-medium">
+          <Spinner />
+          Đang tải hồ sơ người dùng...
+        </p>
       </main>
     );
   }
 
   if (session === null || user === null) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-[#f7f4ef] px-4 text-[#1b1f1d]">
-        <p className="text-sm font-medium">Đang chuyển tới trang đăng nhập...</p>
+      <main className="app-shell flex min-h-screen items-center justify-center px-4 text-foreground">
+        <p className="flex items-center gap-2 text-sm font-medium">
+          <Spinner />
+          Đang chuyển tới trang đăng nhập...
+        </p>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen overflow-x-hidden bg-[#f7f4ef] text-[#1b1f1d]">
-      <section className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-6 px-4 py-5 sm:px-6 sm:py-8 lg:px-8">
-        <header className="flex flex-col gap-2 border-b border-[#d8d2c7] pb-5 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.12em] text-[#456b58]">Autonomous Drones</p>
-            <h1 className="mt-2 text-3xl font-semibold text-[#1d2b24] sm:text-4xl">Trợ lý nông nghiệp AI</h1>
+    <main className="app-shell relative min-h-screen overflow-x-hidden text-foreground">
+      <div className="grid-surface pointer-events-none absolute inset-0" />
+      <section className="relative mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-6 px-4 py-5 sm:px-6 sm:py-7 lg:px-8">
+        <header className="flex flex-col gap-5 border-b border-border/60 pb-5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <span className="grid size-10 place-items-center rounded-xl bg-primary text-primary-foreground">
+              <Radar className="size-5" />
+            </span>
+            <div>
+              <p className="text-lg font-bold tracking-[-0.03em]">AeroField</p>
+              <p className="eyebrow mt-0.5 text-muted-foreground">Command center</p>
+            </div>
           </div>
-          <p className="max-w-xl text-sm leading-6 text-[#526158]">
-            Đăng nhập để hỏi AI Agent về thời tiết, thị trường và phân tích mùa vụ từ backend FastAPI.
-          </p>
+          <div className="flex w-fit items-center gap-2 rounded-full border border-success/20 bg-success-muted px-3 py-2">
+            <Activity className="size-3.5 text-success" />
+            <span className="eyebrow text-success-foreground">Systems operational</span>
+          </div>
         </header>
 
+        <div>
+          <p className="eyebrow text-primary">AI workspace</p>
+          <h1 className="mt-2 text-3xl font-bold tracking-[-0.04em] sm:text-4xl">Trung tâm điều phối nông nghiệp</h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+            Phân tích bối cảnh vận hành và chuyển dữ liệu thành hành động rõ ràng.
+          </p>
+        </div>
+
         {(message.length > 0 || error.length > 0) && (
-          <div
-            className={`rounded-xl border px-4 py-3 text-sm ${
-              error.length > 0
-                ? "border-[#c45d4c] bg-[#fff3ef] text-[#7e2416]"
-                : "border-[#8aa892] bg-[#eef7ef] text-[#235035]"
-            }`}
+          <Alert
+            variant={error.length > 0 ? "destructive" : "success"}
             role={error.length > 0 ? "alert" : "status"}
           >
-            {error.length > 0 ? error : message}
-          </div>
+            <AlertDescription>{error.length > 0 ? error : message}</AlertDescription>
+          </Alert>
         )}
 
-        <section className="grid flex-1 gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">
+        <section className="grid flex-1 gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
           <SessionPanel
             accessTimeLeft={accessTimeLeft}
             isLoading={logoutMutation.isPending}

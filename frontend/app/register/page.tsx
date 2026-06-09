@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { AuthRoute } from "@/components/features/agent/auth-route";
+import { AuthRoute } from "@/components/features/auth/auth-route";
 
 export const metadata: Metadata = {
   title: "Đăng ký | Autonomous Drones",
