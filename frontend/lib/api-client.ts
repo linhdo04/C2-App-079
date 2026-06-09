@@ -1,6 +1,6 @@
 "use client";
 
-import { saveSession } from "@/lib/auth-client";
+import { readSession, saveSession } from "@/lib/auth-client";
 import type { StoredSession, TokenResponse } from "@/types/auth";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/$/, "") ?? "http://localhost:8000";
@@ -24,6 +24,8 @@ export class ApiError extends Error {
     this.status = status;
   }
 }
+
+let refreshRequest: Promise<StoredSession> | null = null;
 
 async function parseError(response: Response): Promise<string> {
   try {
@@ -62,21 +64,26 @@ export async function requestApi<T>(path: string, init: FetchInit = {}, accessTo
   return (await response.json()) as T;
 }
 
-export async function refreshSession(): Promise<StoredSession> {
-  const tokenResponse = await requestApi<TokenResponse>("/auth/refresh", {
-    method: "POST",
-  });
-  return saveSession(tokenResponse);
+export function refreshSession(): Promise<StoredSession> {
+  if (refreshRequest === null) {
+    refreshRequest = requestApi<TokenResponse>("/auth/refresh", {
+      method: "POST",
+    })
+      .then(saveSession)
+      .finally(() => {
+        refreshRequest = null;
+      });
+  }
+
+  return refreshRequest;
 }
 
-export async function requestProtected<T>(
-  path: string,
-  session: StoredSession,
-  init: FetchInit = {},
-): Promise<{ data: T; session: StoredSession }> {
+export async function requestProtected<T>(path: string, init: FetchInit = {}): Promise<T> {
+  let session = readSession();
+  session ??= await refreshSession();
+
   try {
-    const data = await requestApi<T>(path, init, session.access_token);
-    return { data, session };
+    return await requestApi<T>(path, init, session.access_token);
   } catch (error) {
     if (!(error instanceof ApiError) || error.status !== 401) {
       throw error;
@@ -84,16 +91,13 @@ export async function requestProtected<T>(
   }
 
   const refreshedSession = await refreshSession();
-  const data = await requestApi<T>(path, init, refreshedSession.access_token);
-  return { data, session: refreshedSession };
+  return requestApi<T>(path, init, refreshedSession.access_token);
 }
 
-async function fetchProtectedStream(
-  path: string,
-  session: StoredSession,
-  init: FetchInit,
-): Promise<{ response: Response; session: StoredSession }> {
-  let currentSession = session;
+async function fetchProtectedStream(path: string, init: FetchInit): Promise<Response> {
+  let currentSession = readSession();
+  currentSession ??= await refreshSession();
+
   let response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     credentials: "include",
@@ -116,7 +120,7 @@ async function fetchProtectedStream(
     throw new ApiError("Máy chủ không trả về luồng dữ liệu.", response.status);
   }
 
-  return { response, session: currentSession };
+  return response;
 }
 
 function protectedHeaders(init: FetchInit, accessToken: string) {
@@ -166,11 +170,10 @@ function parseEventBlock(block: string): ServerSentEvent | null {
 
 export async function requestProtectedEventStream(
   path: string,
-  session: StoredSession,
   init: FetchInit,
   onEvent: (event: ServerSentEvent) => void,
-): Promise<StoredSession> {
-  const { response, session: currentSession } = await fetchProtectedStream(path, session, init);
+): Promise<void> {
+  const response = await fetchProtectedStream(path, init);
   const reader = response.body!.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -198,6 +201,4 @@ export async function requestProtectedEventStream(
       break;
     }
   }
-
-  return currentSession;
 }

@@ -2,21 +2,21 @@
 
 import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { readSession } from "@/lib/auth-client";
+import { hasAuthSession } from "@/lib/auth-client";
 import { useAuthStore } from "@/lib/auth-store";
 import { ArrowRight } from "lucide-react";
 import Link from "next/link";
 
 function useHomeAuth() {
-  const { isBooting, session, setBooting, setSession } = useAuthStore();
+  const { authStatus, isBooting, setAuthenticated, setBooting } = useAuthStore();
 
   useEffect(() => {
-    setSession(readSession());
+    setAuthenticated(hasAuthSession());
     setBooting(false);
-  }, [setBooting, setSession]);
+  }, [setAuthenticated, setBooting]);
 
   return {
-    isAuthenticated: session !== null,
+    isAuthenticated: authStatus === "authenticated",
     isBooting,
   };
 }

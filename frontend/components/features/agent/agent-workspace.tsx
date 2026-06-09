@@ -16,11 +16,10 @@ import {
   useLogoutMutation,
 } from "@/lib/api-hooks";
 import { ApiError, requestProtectedEventStream } from "@/lib/api-client";
-import { readSession } from "@/lib/auth-client";
+import { hasAuthSession } from "@/lib/auth-client";
 import { useAuthStore } from "@/lib/auth-store";
 import type { AgentQuestionFormValues } from "@/lib/validation";
 import type { ChatMessage, ChatMessageResponse } from "@/types/agent";
-import type { StoredSession } from "@/types/auth";
 
 type AgentWorkspaceProps = {
   chatId?: number | null;
@@ -40,16 +39,17 @@ export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
   const tokenBufferRef = useRef("");
   const animationFrameRef = useRef<number | null>(null);
   const deferredSearch = useDeferredValue(search);
-  const { clearAuth, isBooting, session, setBooting, setSession, setUser, user } = useAuthStore();
-  const currentUserQuery = useCurrentUserQuery(session);
-  const chatsQuery = useChatsQuery(session, deferredSearch);
-  const chats = useMemo(() => chatsQuery.data?.data ?? [], [chatsQuery.data?.data]);
-  const chatQuery = useChatQuery(session, chatId);
+  const { authStatus, clearAuth, isBooting, setAuthenticated, setBooting, setUser, user } = useAuthStore();
+  const isAuthenticated = authStatus === "authenticated";
+  const currentUserQuery = useCurrentUserQuery(isAuthenticated);
+  const chatsQuery = useChatsQuery(isAuthenticated, deferredSearch);
+  const chats = useMemo(() => chatsQuery.data ?? [], [chatsQuery.data]);
+  const chatQuery = useChatQuery(isAuthenticated, chatId);
   const createChatMutation = useCreateChatMutation();
   const deleteChatMutation = useDeleteChatMutation();
   const logoutMutation = useLogoutMutation();
 
-  const activeChat = chatQuery.data?.data;
+  const activeChat = chatQuery.data;
   const messages = useMemo(() => activeChat?.messages ?? [], [activeChat?.messages]);
   const displayMessages = useMemo(() => {
     const pendingMessages: ChatMessage[] = [];
@@ -117,43 +117,34 @@ export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
   );
 
   useEffect(() => {
-    const storedSession = readSession();
-    if (storedSession === null) {
+    if (!hasAuthSession()) {
       clearAuth();
       setBooting(false);
       return;
     }
 
-    setSession(storedSession);
-  }, [clearAuth, setBooting, setSession]);
+    setAuthenticated(true);
+  }, [clearAuth, setAuthenticated, setBooting]);
 
   useEffect(() => {
-    if (isBooting || session !== null) {
+    if (isBooting || isAuthenticated) {
       return;
     }
 
     router.replace("/login");
-  }, [isBooting, router, session]);
+  }, [isAuthenticated, isBooting, router]);
 
   useEffect(() => {
     if (currentUserQuery.data === undefined) {
       return;
     }
 
-    setSession(currentUserQuery.data.session);
-    setUser(currentUserQuery.data.data);
+    setUser(currentUserQuery.data);
     setBooting(false);
-  }, [currentUserQuery.data, setBooting, setSession, setUser]);
+  }, [currentUserQuery.data, setBooting, setUser]);
 
   useEffect(() => {
-    const refreshedSession = chatQuery.data?.session ?? chatsQuery.data?.session;
-    if (refreshedSession !== undefined) {
-      setSession(refreshedSession);
-    }
-  }, [chatQuery.data?.session, chatsQuery.data?.session, setSession]);
-
-  useEffect(() => {
-    if (session === null || currentUserQuery.error === null) {
+    if (!isAuthenticated || currentUserQuery.error === null) {
       return;
     }
 
@@ -163,7 +154,7 @@ export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
     }, 0);
 
     return () => window.clearTimeout(timeoutId);
-  }, [currentUserQuery.error, resetAuthState, session, setBooting]);
+  }, [currentUserQuery.error, isAuthenticated, resetAuthState, setBooting]);
 
   useEffect(() => {
     if (queryError === null || queryError === undefined) {
@@ -182,7 +173,7 @@ export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
   }, [queryError, resetAuthState]);
 
   async function handleAsk(values: AgentQuestionFormValues) {
-    if (session === null) {
+    if (!isAuthenticated) {
       setError("Vui lòng đăng nhập trước khi hỏi AI Agent.");
       return false;
     }
@@ -196,21 +187,17 @@ export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
     tokenBufferRef.current = "";
 
     try {
-      let currentSession: StoredSession = session;
       let currentChatId = chatId;
       let completedResponse: ChatMessageResponse | null = null;
       let streamError = "";
 
       if (currentChatId === null) {
-        const created = await createChatMutation.mutateAsync(currentSession);
-        currentSession = created.session;
-        currentChatId = created.data.id;
-        setSession(currentSession);
+        const created = await createChatMutation.mutateAsync();
+        currentChatId = created.id;
       }
 
-      currentSession = await requestProtectedEventStream(
+      await requestProtectedEventStream(
         `/agent/chats/${currentChatId}/messages/stream`,
-        currentSession,
         {
           method: "POST",
           body: JSON.stringify({ question: values.question }),
@@ -237,7 +224,6 @@ export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
           }
         },
       );
-      setSession(currentSession);
 
       if (streamError.length > 0) {
         throw new Error(streamError);
@@ -248,11 +234,8 @@ export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
 
       const result = completedResponse as ChatMessageResponse;
       queryClient.setQueryData(["agent", "chats", currentChatId], {
-        data: {
-          ...result.chat,
-          messages: [...messages, result.user_message, result.assistant_message],
-        },
-        session: currentSession,
+        ...result.chat,
+        messages: [...messages, result.user_message, result.assistant_message],
       });
       await queryClient.invalidateQueries({ queryKey: ["agent", "chats"], exact: false });
       if (chatId === null) {
@@ -286,17 +269,13 @@ export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
   }
 
   async function handleDelete(chatIdToDelete: number) {
-    if (session === null || !window.confirm("Bạn có chắc muốn xoá cuộc trò chuyện này?")) {
+    if (!isAuthenticated || !window.confirm("Bạn có chắc muốn xoá cuộc trò chuyện này?")) {
       return;
     }
 
     setError("");
     try {
-      const result = await deleteChatMutation.mutateAsync({
-        chatId: chatIdToDelete,
-        session,
-      });
-      setSession(result.session);
+      await deleteChatMutation.mutateAsync(chatIdToDelete);
       queryClient.removeQueries({ queryKey: ["agent", "chats", chatIdToDelete] });
       if (chatId === chatIdToDelete) {
         router.replace("/agent");
@@ -308,7 +287,7 @@ export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
   }
 
   async function handleLogout() {
-    if (session === null) {
+    if (!isAuthenticated) {
       resetAuthState();
       return;
     }
@@ -316,7 +295,7 @@ export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
     setError("");
     setMessage("");
     try {
-      await logoutMutation.mutateAsync(session);
+      await logoutMutation.mutateAsync();
     } catch {
       // Clear the local session even if server-side revoke cannot complete.
     } finally {
@@ -326,11 +305,11 @@ export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
 
   const loadingLabel = useMemo(() => {
     if (isBooting) return "Đang kiểm tra phiên đăng nhập...";
-    if (session !== null && user === null) return "Đang tải hồ sơ người dùng...";
+    if (isAuthenticated && user === null) return "Đang tải hồ sơ người dùng...";
     return "Đang chuyển tới trang đăng nhập...";
-  }, [isBooting, session, user]);
+  }, [isAuthenticated, isBooting, user]);
 
-  if (isBooting || (session !== null && user === null) || session === null || user === null) {
+  if (isBooting || (isAuthenticated && user === null) || !isAuthenticated || user === null) {
     return (
       <main className="app-shell flex h-dvh items-center justify-center px-4 text-foreground">
         <p className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
