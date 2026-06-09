@@ -35,7 +35,7 @@ try:
 except ImportError:
     SMP_AVAILABLE = False
 
-from path_planner import RotatingCalipersPlanner
+from path_planner import RotatingCalipersPlanner, BECDPlanner, FARMLAND, HARD_OBSTACLES
 
 
 # ── Constants — must match train.py ───────────────────────────────────────────
@@ -159,17 +159,18 @@ def coverage_stats(mask: np.ndarray) -> dict:
 # ── Single-image pipeline ─────────────────────────────────────────────────────
 
 def run_single(
-    image_path: str,
-    model:      torch.nn.Module,
-    device:     torch.device,
-    out_dir:    Path,
+    image_path:   str,
+    model:        torch.nn.Module,
+    device:       torch.device,
+    out_dir:      Path,
     *,
-    plan:    bool  = False,
-    tile:    int   = TILE_SIZE,
-    stride:  int   = 192,
-    swath:   int   = 40,
-    overlap: float = 0.20,
-    safety:  int   = 10,
+    plan:         bool  = False,
+    planner_name: str   = "rcpp",
+    tile:         int   = TILE_SIZE,
+    stride:       int   = 192,
+    swath:        int   = 40,
+    overlap:      float = 0.20,
+    safety:       int   = 10,
 ):
     stem = Path(image_path).stem
 
@@ -193,6 +194,21 @@ def run_single(
     print(f"[INF] Mask (class IDs)    → {mask_path}")
     print(f"[INF] Segmentation colour → {seg_path}")
 
+    # ROI map — farmland pixels in white
+    roi_map = ((mask == FARMLAND).astype(np.uint8) * 255)
+    roi_path = out_dir / f"{stem}_roi.png"
+    cv2.imwrite(str(roi_path), roi_map)
+    print(f"[INF] ROI map             → {roi_path}")
+
+    # Obstacle map — hard obstacles (building/woodland/water) dilated by safety margin
+    obs_raw = np.isin(mask, HARD_OBSTACLES).astype(np.uint8)
+    if safety > 0:
+        k       = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * safety + 1, 2 * safety + 1))
+        obs_raw = cv2.dilate(obs_raw, k)
+    obs_path = out_dir / f"{stem}_obstacles.png"
+    cv2.imwrite(str(obs_path), obs_raw * 255)
+    print(f"[INF] Obstacle map        → {obs_path}")
+
     # 3 — Coverage stats
     stats      = coverage_stats(mask)
     stats_path = out_dir / f"{stem}_stats.json"
@@ -206,21 +222,34 @@ def run_single(
     if not plan:
         return
 
-    print("[INF] Running RCPP path planner...")
-    planner   = RotatingCalipersPlanner(swath, overlap, safety)
-    waypoints = planner.plan(mask)
+    planners_to_run = (
+        ["rcpp", "becd"] if planner_name == "both" else [planner_name]
+    )
 
-    n_sweeps = (waypoints[-1].sweep_idx + 1) if waypoints else 0
-    print(f"[INF] Sweep angle         : {planner._last_angle:.1f}°")
-    print(f"[INF] Sweep lines         : {n_sweeps}")
-    print(f"[INF] Total waypoints     : {len(waypoints)}")
+    for pname in planners_to_run:
+        if pname == "becd":
+            planner = BECDPlanner(swath, overlap, safety)
+            tag     = "BECD"
+        else:
+            planner = RotatingCalipersPlanner(swath, overlap, safety)
+            tag     = "RCPP"
 
-    path_img  = out_dir / f"{stem}_path.png"
-    wp_path   = out_dir / f"{stem}_waypoints.json"
-    planner.visualize(mask, waypoints, str(path_img))
-    wp_path.write_text(json.dumps([asdict(wp) for wp in waypoints], indent=2))
-    print(f"[INF] Flight path vis     → {path_img}")
-    print(f"[INF] Waypoints JSON      → {wp_path}")
+        print(f"[INF] Running {tag} path planner...")
+        waypoints = planner.plan(mask)
+        n_sweeps  = (waypoints[-1].sweep_idx + 1) if waypoints else 0
+
+        if pname == "rcpp":
+            print(f"[INF] Sweep angle         : {planner._last_angle:.1f}°")
+        print(f"[INF] Cells / sweeps      : {n_sweeps}")
+        print(f"[INF] Total waypoints     : {len(waypoints)}")
+
+        suffix   = f"_{pname}" if planner_name == "both" else ""
+        path_img = out_dir / f"{stem}_path{suffix}.png"
+        wp_path  = out_dir / f"{stem}_waypoints{suffix}.json"
+        planner.visualize(mask, waypoints, str(path_img))
+        wp_path.write_text(json.dumps([asdict(wp) for wp in waypoints], indent=2))
+        print(f"[INF] Flight path vis     → {path_img}")
+        print(f"[INF] Waypoints JSON      → {wp_path}")
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -238,7 +267,9 @@ def _parse_args():
     p.add_argument("--out_dir",    default="results",
                    help="Output directory  (default: results/)")
     p.add_argument("--plan",       action="store_true",
-                   help="Run RCPP path planner after segmentation")
+                   help="Run path planner after segmentation")
+    p.add_argument("--planner",   choices=["rcpp", "becd", "both"], default="rcpp",
+                   help="Which planner to run: rcpp, becd, or both (default: rcpp)")
 
     # Inference tuning
     p.add_argument("--tile",   type=int, default=TILE_SIZE,
@@ -290,12 +321,13 @@ def main():
     for img_path in images:
         run_single(
             img_path, model, device, out_dir,
-            plan    = args.plan,
-            tile    = args.tile,
-            stride  = args.stride,
-            swath   = args.swath,
-            overlap = args.overlap,
-            safety  = args.safety,
+            plan         = args.plan,
+            planner_name = args.planner,
+            tile         = args.tile,
+            stride       = args.stride,
+            swath        = args.swath,
+            overlap      = args.overlap,
+            safety       = args.safety,
         )
 
     print(f"\n[INF] All done. Results → {out_dir.resolve()}")

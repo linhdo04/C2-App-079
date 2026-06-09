@@ -19,4 +19,4 @@ build/
 .ai-log/*.jsonl
 
 /data
-/checkpoints
+checkpoints/

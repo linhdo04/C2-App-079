@@ -2,8 +2,8 @@
 Training Script — U-Net + ResNet34 for Agricultural Land Segmentation
 ======================================================================
 Dataset : LandCover.ai (preprocessed by preprocess.py)
-Model   : U-Net with ResNet34 encoder (pretrained on ImageNet)
-Loss    : DiceLoss + CrossEntropyLoss (handles class imbalance)
+Model   : U-Net with ResNet50 encoder (pretrained on ImageNet)
+Loss    : CE (weighted) + DiceLoss + FocalLoss (handles class imbalance)
 Metrics : IoU per class + mean IoU
 
 Your dataset stats (computed from data/processed/train/images/):
@@ -49,7 +49,7 @@ except ImportError:
 # CONFIG
 # ─────────────────────────────────────────────
 _HERE       = Path(__file__).parent
-DATA_DIR    = _HERE / "data" / "processed"
+DATA_DIR    = _HERE.parent.parent / "data" / "processed"
 CKPT_DIR    = _HERE / "checkpoints"
 LOG_DIR     = _HERE / "logs"
 
@@ -62,7 +62,8 @@ CLASS_NAMES = ["background", "building", "woodland", "water", "road"]
 
 # Class weights — inverse of frequency to handle imbalance
 # background=72%, woodland=20%, water=4%, road=1.8%, building=1.1%
-CLASS_WEIGHTS = torch.tensor([0.15, 2.50, 0.80, 1.50, 2.00], dtype=torch.float32)
+# road and building doubled vs. previous run: both stalled around 0.62 and 0.77
+CLASS_WEIGHTS = torch.tensor([0.15, 4.00, 0.80, 1.50, 4.00], dtype=torch.float32)
 
 SEED = 42
 random.seed(SEED)
@@ -160,7 +161,7 @@ def build_model(num_classes: int = NUM_CLASSES) -> nn.Module:
         raise ImportError("pip install segmentation-models-pytorch")
 
     model = smp.Unet(
-        encoder_name    = "resnet34",
+        encoder_name    = "resnet50",
         encoder_weights = "imagenet",
         in_channels     = 3,
         classes         = num_classes,
@@ -173,21 +174,25 @@ def build_model(num_classes: int = NUM_CLASSES) -> nn.Module:
 # ─────────────────────────────────────────────
 class CombinedLoss(nn.Module):
     """
-    DiceLoss + CrossEntropyLoss.
-    - CrossEntropy handles per-pixel classification with class weights
-    - Dice handles overlap quality (better for imbalanced segmentation)
-    Combined = best of both worlds for your 72% background scenario.
+    CE (weighted) + Dice + Focal.
+    - CE + class weights: explicit per-class penalty scaling
+    - Dice: overlap quality for imbalanced segmentation
+    - Focal (gamma=2): down-weights easy background pixels, focuses on hard road/building
     """
-    def __init__(self, class_weights: torch.Tensor, dice_weight: float = 0.5):
+    def __init__(self, class_weights: torch.Tensor,
+                 dice_weight: float = 0.4, focal_weight: float = 0.2):
         super().__init__()
         self.ce_loss    = nn.CrossEntropyLoss(weight=class_weights)
         self.dice_loss  = smp.losses.DiceLoss(mode="multiclass", smooth=1.0)
-        self.dice_weight = dice_weight
+        self.focal_loss = smp.losses.FocalLoss(mode="multiclass", gamma=2.0)
+        self.dice_weight  = dice_weight
+        self.focal_weight = focal_weight
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor):
-        ce   = self.ce_loss(pred, target)
-        dice = self.dice_loss(pred, target)
-        return (1 - self.dice_weight) * ce + self.dice_weight * dice
+        ce_weight = 1.0 - self.dice_weight - self.focal_weight
+        return (ce_weight    * self.ce_loss(pred, target)
+                + self.dice_weight  * self.dice_loss(pred, target)
+                + self.focal_weight * self.focal_loss(pred, target))
 
 
 # ─────────────────────────────────────────────
@@ -368,9 +373,9 @@ def main():
     criterion = CombinedLoss(weights, dice_weight=0.5)
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
 
-    # Cosine annealing — smoothly decays LR over training
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=args.epochs, eta_min=1e-6)
+    # Warm restarts every T_0 epochs — periodically resets LR to escape plateaus
+    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer, T_0=10, T_mult=1, eta_min=1e-6)
 
     # Mixed precision (GPU only)
     scaler = torch.cuda.amp.GradScaler() if device.type == "cuda" else None
