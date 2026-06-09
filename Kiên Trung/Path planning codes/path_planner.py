@@ -31,7 +31,9 @@ import argparse
 import json
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
+
+import heapq
 
 import cv2
 import numpy as np
@@ -265,6 +267,109 @@ class RotatingCalipersPlanner:
         return wps
 
 
+# ── A* transit routing ────────────────────────────────────────────────────────
+
+def _line_free(
+    start_xy: Tuple[float, float],
+    goal_xy:  Tuple[float, float],
+    obs:      np.ndarray,
+) -> bool:
+    """Return True if the straight line between start and goal is obstacle-free."""
+    x0, y0 = int(start_xy[0]), int(start_xy[1])
+    x1, y1 = int(goal_xy[0]),  int(goal_xy[1])
+    H, W   = obs.shape
+    n      = max(abs(x1 - x0), abs(y1 - y0), 1)
+    xs     = np.linspace(x0, x1, n + 1).astype(int).clip(0, W - 1)
+    ys     = np.linspace(y0, y1, n + 1).astype(int).clip(0, H - 1)
+    return not obs[ys, xs].any()
+
+
+def _astar(
+    start_xy: Tuple[float, float],
+    goal_xy:  Tuple[float, float],
+    obs:      np.ndarray,
+    step:     int = 8,
+    max_iter: int = 50_000,
+) -> List[Tuple[float, float]]:
+    """
+    A* on a downsampled obstacle grid.
+
+    Returns an ordered list of (x, y) pixel coords in the original image
+    space (including start and goal).  Returns [] if the goal is unreachable
+    or the node-expansion limit is hit (caller should fall back to straight line).
+
+    Args:
+        start_xy / goal_xy: pixel coords in original image space.
+        obs:      H×W binary uint8 mask (1 = blocked).
+        step:     Downsample factor — higher = faster but less precise routing.
+        max_iter: Safety cap on node expansions to prevent runaway searches.
+    """
+    H, W = obs.shape
+
+    # Max-pool downsample: a cell is blocked if ANY pixel inside it is blocked
+    pad_h = (-H % step) % step
+    pad_w = (-W % step) % step
+    padded = np.pad(obs, ((0, pad_h), (0, pad_w)), constant_values=0)
+    dH = padded.shape[0] // step
+    dW = padded.shape[1] // step
+    grid = padded.reshape(dH, step, dW, step).max(axis=(1, 3)).astype(bool)
+
+    sx, sy = int(start_xy[0]) // step, int(start_xy[1]) // step
+    gx, gy = int(goal_xy[0])  // step, int(goal_xy[1])  // step
+    sx, sy = max(0, min(sx, dW - 1)), max(0, min(sy, dH - 1))
+    gx, gy = max(0, min(gx, dW - 1)), max(0, min(gy, dH - 1))
+
+    # Force start/goal cells open so A* can begin/end even inside a dilated margin
+    grid[sy, sx] = False
+    grid[gy, gx] = False
+
+    if (sx, sy) == (gx, gy):
+        return [start_xy, goal_xy]
+
+    DIRS  = [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1)]
+    COSTS = [1.0,   1.0,  1.0,   1.0,  1.414,   1.414,  1.414,  1.414]
+
+    g_score:   Dict[Tuple[int,int], float]                    = {(sx, sy): 0.0}
+    came_from: Dict[Tuple[int,int], Optional[Tuple[int,int]]] = {(sx, sy): None}
+    heap = [(np.hypot(sx - gx, sy - gy), 0.0, sx, sy)]
+    iters = 0
+
+    while heap:
+        if iters >= max_iter:
+            return []
+        _, g, x, y = heapq.heappop(heap)
+        iters += 1
+
+        if g > g_score.get((x, y), float("inf")):
+            continue
+
+        if x == gx and y == gy:
+            path: List[Tuple[int, int]] = []
+            cur: Optional[Tuple[int, int]] = (gx, gy)
+            while cur is not None:
+                path.append(cur)
+                cur = came_from[cur]
+            path.reverse()
+            result = [
+                (float(px * step + step // 2), float(py * step + step // 2))
+                for px, py in path
+            ]
+            result[0]  = start_xy
+            result[-1] = goal_xy
+            return result
+
+        for (dx, dy), cost in zip(DIRS, COSTS):
+            nx, ny = x + dx, y + dy
+            if 0 <= nx < dW and 0 <= ny < dH and not grid[ny, nx]:
+                ng = g + cost
+                if ng < g_score.get((nx, ny), float("inf")):
+                    g_score[(nx, ny)]   = ng
+                    came_from[(nx, ny)] = (x, y)
+                    heapq.heappush(heap, (ng + np.hypot(nx - gx, ny - gy), ng, nx, ny))
+
+    return []
+
+
 # ── BECD ──────────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -295,25 +400,28 @@ class BECDPlanner:
         swath_width:   int   = 40,
         overlap:       float = 0.20,
         safety_margin: int   = 10,
+        astar_step:    int   = 8,
     ):
         if not 0.0 <= overlap < 1.0:
             raise ValueError("overlap must be in [0, 1)")
         self.swath_width   = swath_width
         self.step          = max(1, int(swath_width * (1.0 - overlap)))
         self.safety_margin = safety_margin
+        self.astar_step    = astar_step
         self._cells: List[_Cell] = []
 
     # ── Public API ────────────────────────────────────────────────────────────
 
     def plan(self, mask: np.ndarray) -> List[Waypoint]:
-        trav = self._traversable(mask)
+        obs  = self._obstacle_mask(mask)
+        trav = ((mask == FARMLAND) & ~obs.astype(bool)).astype(np.uint8)
         if not trav.any():
             print("[BECD] No traversable area found.")
             return []
         cells = self._decompose(trav)
         self._cells = cells
         print(f"[BECD] Decomposed into {len(cells)} cell(s).")
-        return self._cover_cells(cells, trav)
+        return self._cover_cells(cells, trav, obs)
 
     def visualize(
         self,
@@ -350,13 +458,13 @@ class BECDPlanner:
 
     # ── Private ───────────────────────────────────────────────────────────────
 
-    def _traversable(self, mask: np.ndarray) -> np.ndarray:
+    def _obstacle_mask(self, mask: np.ndarray) -> np.ndarray:
         obs = np.isin(mask, HARD_OBSTACLES).astype(np.uint8)
         if self.safety_margin > 0:
             r = self.safety_margin
             k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
             obs = cv2.dilate(obs, k)
-        return ((mask == FARMLAND) & ~obs.astype(bool)).astype(np.uint8)
+        return obs
 
     @staticmethod
     def _col_intervals(col: np.ndarray) -> List[Tuple[int, int]]:
@@ -461,7 +569,7 @@ class BECDPlanner:
         return raw
 
     def _cover_cells(
-        self, cells: List[_Cell], trav: np.ndarray
+        self, cells: List[_Cell], trav: np.ndarray, obs: np.ndarray
     ) -> List[Waypoint]:
         sweep_offset = 0
         cell_segs: List[List[Tuple[float, float, int]]] = []
@@ -493,17 +601,43 @@ class BECDPlanner:
                 nxt_seg = list(reversed(nxt_seg))
             ordered.append((nxt_idx, nxt_seg))
 
-        all_raw: List[Tuple[float, float, int]] = []
-        transit_indices: set = set()
-        for i, (_, seg) in enumerate(ordered):
-            if i > 0 and seg:
-                transit_indices.add(len(all_raw))  # first point of each non-first cell is transit arrival
-            all_raw.extend(seg)
+        # Stitch cells with A*-routed transitions
+        all_pts: List[Tuple[float, float, int, bool]] = []
+        n_astar = 0
 
-        return [
-            Waypoint(x, y, s, is_transit=(idx in transit_indices))
-            for idx, (x, y, s) in enumerate(all_raw)
-        ]
+        for i, (_, seg) in enumerate(ordered):
+            if i == 0:
+                for x, y, s in seg:
+                    all_pts.append((x, y, s, False))
+            else:
+                prev_x, prev_y     = all_pts[-1][0], all_pts[-1][1]
+                next_x, next_y, next_s = seg[0]
+
+                if _line_free((prev_x, prev_y), (next_x, next_y), obs):
+                    # Straight line is clear — direct transit
+                    all_pts.append((next_x, next_y, next_s, True))
+                else:
+                    path = _astar(
+                        (prev_x, prev_y), (next_x, next_y),
+                        obs, step=self.astar_step,
+                    )
+                    if path:
+                        n_astar += 1
+                        # path[0] = prev point (already in all_pts), skip it
+                        for tx, ty in path[1:]:
+                            all_pts.append((tx, ty, next_s, True))
+                    else:
+                        # A* hit limit — straight-line fallback
+                        all_pts.append((next_x, next_y, next_s, True))
+
+                # Coverage waypoints for this cell (seg[0] already added above)
+                for x, y, s in seg[1:]:
+                    all_pts.append((x, y, s, False))
+
+        if len(ordered) > 1:
+            print(f"[BECD] A* rerouted {n_astar} / {len(ordered) - 1} inter-cell transition(s).")
+
+        return [Waypoint(x, y, s, t) for x, y, s, t in all_pts]
 
 
 # ── Utility ───────────────────────────────────────────────────────────────────
