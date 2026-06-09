@@ -1,0 +1,65 @@
+====================================================
+  AI DRONE - AGRICULTURAL SURVEY  |  Cách chạy
+====================================================
+
+Thư mục làm việc: C2-App-079/
+
+
+── PHASE 1: TRAINING ────────────────────────────────
+cd C2-App-079
+
+# Train từ đầu (30 epochs, batch 8)
+python train.py
+
+# Tuỳ chỉnh
+python train.py --epochs 50 --batch_size 4 --lr 0.0001
+
+# Resume từ checkpoint
+python train.py --resume checkpoints/latest.pth
+
+Checkpoint tốt nhất → checkpoints/best_model.pth
+Log training      → logs/run_<timestamp>.json
+
+
+── PHASE 2: INFERENCE + PATH PLANNING ───────────────
+cd C2-App-079
+
+# Segment một tile (256x256)
+python inference.py --image "data/processed/images/M-33-20-D-c-4-2_0000.jpg"
+
+# Segment + vẽ flight path luôn
+python inference.py --image "data/processed/images/M-33-20-D-c-4-2_0000.jpg" --plan
+
+# Batch cả folder
+python inference.py --image_dir data/processed/images/ --plan --out_dir results/
+
+Output trong results/:
+  *_mask.png       — mask class IDs (grayscale)
+  *_seg.png        — mask tô màu
+  *_stats.json     — % diện tích từng class
+  *_path.png       — flight path overlay
+  *_waypoints.json — list waypoints {x, y, sweep_idx, is_transit}
+
+
+── TUỲ CHỈNH PATH PLANNER ───────────────────────────
+python inference.py --image ... --plan \
+  --swath   40   # footprint camera (px)  \
+  --overlap 0.2  # overlap giữa các sweep  \
+  --safety  10   # khoảng cách an toàn với vật cản (px)
+
+
+── CLASS IDs ─────────────────────────────────────────
+  0 = farmland (target)
+  1 = building  (vật cản cứng)
+  2 = woodland  (vật cản cứng)
+  3 = water     (vật cản cứng)
+  4 = road      (passable)
+
+
+── FILES CHÍNH ───────────────────────────────────────
+  train.py         — training U-Net + ResNet34
+  inference.py     — inference + RCPP path planner
+  path_planner.py  — RCPP (import riêng nếu cần)
+  preprocess.py    — tạo tiles 256x256 từ ảnh gốc
+
+====================================================
