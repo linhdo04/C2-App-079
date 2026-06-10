@@ -143,16 +143,20 @@ def _extract_number_near_keywords(
     keywords: tuple[str, ...],
 ) -> float | None:
     normalized = _normalize_text(text)
+    matches: list[tuple[int, float]] = []
     for keyword in keywords:
         keyword_pattern = _numeric_keyword_pattern(keyword)
-        match = re.search(
+        for match in re.finditer(
             rf"(?:{NUMBER_PATTERN}\s*{keyword_pattern})"
             rf"|(?:{keyword_pattern}\s*{NUMBER_PATTERN})",
             normalized,
-        )
-        if match:
-            return float(next(group for group in match.groups() if group is not None))
-    return None
+        ):
+            value = float(next(group for group in match.groups() if group is not None))
+            matches.append((match.start(), value))
+
+    if not matches:
+        return None
+    return min(matches, key=lambda item: item[0])[1]
 
 
 async def _run_sync_tool_in_thread(tool_input: dict[str, Any]) -> str:

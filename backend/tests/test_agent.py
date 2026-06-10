@@ -157,9 +157,14 @@ def test_extract_crop_data_supports_common_number_formats(
         ("năng suất 4.2", ("năng suất",), 4.2),
         ("năng suất4.2", ("năng suất",), 4.2),
         ("4.2 năng suất", ("năng suất",), 4.2),
+        (
+            "năng suất 4.2, phương án khác là 6 tấn/ha",
+            ("tấn/ha", "năng suất"),
+            4.2,
+        ),
     ],
 )
-def test_extract_number_near_keywords_checks_both_directions(
+def test_extract_number_near_keywords_uses_first_match_in_text(
     text: str,
     keywords: tuple[str, ...],
     expected: float,
