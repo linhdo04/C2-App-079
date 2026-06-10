@@ -9,10 +9,30 @@ Các biến môi trường liên quan:
 ```bash
 GEMINI_API_KEY=<required-to-initialize-model>
 TAVILY_API_KEY=<required-for-web-search>
-DATABASE_URL=<required-for-database-tool>
+AGENT_TOOL_TIMEOUT_SECONDS=15
+AGENT_LLM_TIMEOUT_SECONDS=20
 ```
 
-Open-Meteo không yêu cầu API key nhưng cần network access.
+Telemetry tool dùng PostgreSQL đã cấu hình cho backend.
+
+## Demo data
+
+Sau khi chạy migration, tạo tài khoản, mission, sensor và 24 mẫu telemetry:
+
+```bash
+make db-upgrade
+make db-seed
+```
+
+Thông tin đăng nhập:
+
+```text
+Email: demo@aerofield.example.com
+Password: Demo12345!
+```
+
+Seed là idempotent: chạy lại sẽ cập nhật tài khoản demo và thay thế telemetry
+của sensor `DEMO-ENV-001`, không xóa dữ liệu khác.
 
 ## Chạy ứng dụng
 
@@ -35,15 +55,14 @@ API contract chi tiết nằm tại [Agent API](../api/agent.md).
 ```python
 from agent import run_agent
 
-answer = await run_agent("Dự báo thời tiết ở Hà Nội")
+answer = await run_agent("Phân tích nhiệt độ và độ ẩm", user_id=7)
 ```
 
 LangChain tools phải được gọi bằng `.invoke()` hoặc `.ainvoke()`:
 
 ```python
-from agent.tools import query_crop_database, web_search
+from agent.tools import web_search
 
-users = await query_crop_database.ainvoke({"query": "danh sách người dùng"})
 results = web_search.invoke({"query": "giá lúa"})
 ```
 
@@ -63,7 +82,7 @@ make lint
 make check
 ```
 
-Các test liên quan đến Tavily, Open-Meteo, Gemini hoặc database nên mock boundary
+Các test liên quan đến Tavily, Gemini hoặc database nên mock boundary
 bên ngoài để ổn định và không phụ thuộc API key/network trong unit tests. Bộ
 test mặc định của agent dùng mock offline.
 

@@ -25,6 +25,14 @@ class TelemetryModel(BaseModel, table=True):
             "heading IS NULL OR (heading >= 0 AND heading < 360)",
             name="ck_telemetry_heading",
         ),
+        CheckConstraint(
+            "temperature_celsius IS NULL OR temperature_celsius >= -273.15",
+            name="ck_telemetry_temperature_celsius",
+        ),
+        CheckConstraint(
+            "humidity_percent IS NULL OR humidity_percent BETWEEN 0 AND 100",
+            name="ck_telemetry_humidity_percent",
+        ),
         Index("ix_telemetry_iot_node_id_timestamp", "iot_node_id", "timestamp"),
     )
 
@@ -42,6 +50,8 @@ class TelemetryModel(BaseModel, table=True):
     altitude: float | None = Field(default=None)
     velocity: float | None = Field(default=None, ge=0)
     heading: float | None = Field(default=None, ge=0, lt=360)
+    temperature_celsius: float | None = Field(default=None, ge=-273.15)
+    humidity_percent: float | None = Field(default=None, ge=0, le=100)
     data: dict[str, float] | None = Field(
         default=None,
         sa_column=Column("data", JSON, nullable=True),

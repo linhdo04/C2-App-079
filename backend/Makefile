@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help run test lint lint-check format format-check typecheck check db-migrate db-upgrade db-downgrade
+.PHONY: help run test lint lint-check format format-check typecheck check db-migrate db-upgrade db-downgrade db-seed
 
 help:
 	@echo ""
@@ -22,6 +22,7 @@ help:
 	@echo "                         Create a new Alembic migration"
 	@echo "  make db-upgrade        Apply all pending migrations"
 	@echo "  make db-downgrade      Roll back the latest migration"
+	@echo "  make db-seed           Seed demo user, mission, sensor and telemetry"
 	@echo ""
 
 install:
@@ -65,3 +66,6 @@ db-upgrade:
 
 db-downgrade:
 	uv run alembic downgrade -1
+
+db-seed:
+	uv run python -m scripts.seed_demo

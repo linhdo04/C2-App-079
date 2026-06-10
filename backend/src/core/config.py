@@ -13,6 +13,16 @@ class Settings(BaseSettings):
 
     gemini_api_key: str = Field(alias="GEMINI_API_KEY")
     tavily_api_key: str = Field(alias="TAVILY_API_KEY")
+    agent_tool_timeout_seconds: float = Field(
+        alias="AGENT_TOOL_TIMEOUT_SECONDS",
+        default=15.0,
+        gt=0,
+    )
+    agent_llm_timeout_seconds: float = Field(
+        alias="AGENT_LLM_TIMEOUT_SECONDS",
+        default=20.0,
+        gt=0,
+    )
 
     app_name: str = Field(alias="APP_NAME")
     app_env: Literal["development", "production", "testing"] = Field(

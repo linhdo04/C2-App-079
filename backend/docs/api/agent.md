@@ -72,7 +72,7 @@ Khi chạy tool, payload có thêm tên tool:
 
 ```text
 event: status
-data: {"phase":"tool","tool":"weather","message":"Đang lấy dữ liệu thời tiết..."}
+data: {"phase":"tool","tool":"telemetry","message":"Đang phân tích nhiệt độ và độ ẩm..."}
 ```
 
 Token event:

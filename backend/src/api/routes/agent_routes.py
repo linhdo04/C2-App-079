@@ -158,14 +158,19 @@ def _sse_event(event: str, data: dict[str, Any]) -> str:
 
 
 @router.post("/agent/ask")
-async def ask(req: AskRequest) -> dict[str, Any]:
+async def ask(
+    req: AskRequest,
+    current_user: Annotated[UserModel, Depends(get_current_user)],
+) -> dict[str, Any]:
     """Endpoint để hỏi agent bằng ngôn ngữ tự nhiên.
 
     Trả về JSON: {"answer": "..."}
     """
     try:
         # Prefer the async helper which normalizes sync/async implementations
-        result = await run_agent(req.question)
+        if current_user.id is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+        result = await run_agent(req.question, current_user.id)
         return {"answer": result}
     except Exception as exc:  # pragma: no cover - bubble up runtime errors
         raise HTTPException(status_code=500, detail=str(exc))
@@ -307,7 +312,7 @@ async def create_chat_message(
     await _get_active_chat(session, chat_id, current_user.id)
     question = req.question.strip()
     try:
-        answer = await run_agent(question)
+        answer = await run_agent(question, current_user.id)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -327,20 +332,20 @@ async def stream_chat_message(
     current_user: Annotated[UserModel, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> StreamingResponse:
-    if current_user.id is None:
+    user_id = current_user.id
+    if user_id is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
-    await _get_active_chat(session, chat_id, current_user.id)
+    await _get_active_chat(session, chat_id, user_id)
     # Release the read-only transaction before the potentially long LLM stream.
     # Persistence revalidates ownership and locks the latest chat row.
     await session.rollback()
     question = req.question.strip()
-    user_id = current_user.id
 
     async def event_stream() -> AsyncIterator[str]:
         answer_parts: list[str] = []
         try:
-            async for event in stream_agent(question):
+            async for event in stream_agent(question, user_id):
                 event_name = event["event"]
                 if event_name == "token":
                     content = event.get("content", "")
@@ -377,6 +382,7 @@ async def stream_chat_message(
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
     )
