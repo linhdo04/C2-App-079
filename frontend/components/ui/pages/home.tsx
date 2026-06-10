@@ -24,7 +24,7 @@ function useHomeAuth() {
 function Nav() {
   const { isAuthenticated, isBooting } = useHomeAuth();
 
-  if (isBooting || isAuthenticated) {
+  if (isBooting) {
     return null;
   }
 
@@ -38,14 +38,32 @@ function Nav() {
         variant="ghost"
         className="hidden sm:inline-flex"
       >
-        <Link href="/login">Đăng nhập</Link>
+        <Link href="/dashboard">Dashboard</Link>
       </Button>
-      <Button asChild>
-        <Link href="/register">
-          Bắt đầu
-          <ArrowRight />
-        </Link>
-      </Button>
+      {isAuthenticated ? (
+        <Button asChild>
+          <Link href="/agent">
+            AI Agent
+            <ArrowRight />
+          </Link>
+        </Button>
+      ) : (
+        <>
+          <Button
+            asChild
+            variant="ghost"
+            className="hidden md:inline-flex"
+          >
+            <Link href="/login">Đăng nhập</Link>
+          </Button>
+          <Button asChild>
+            <Link href="/register">
+              Bắt đầu
+              <ArrowRight />
+            </Link>
+          </Button>
+        </>
+      )}
     </nav>
   );
 }

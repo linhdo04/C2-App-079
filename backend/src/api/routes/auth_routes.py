@@ -16,6 +16,7 @@ from api.dependencies import (
     get_current_user,
     redis_unavailable_error,
 )
+from api.responses import DataResponse
 from core import settings
 from core.security import (
     LEGACY_PASSWORD_HASH,
@@ -184,13 +185,13 @@ async def _get_refresh_user(
 
 @router.post(
     "/register",
-    response_model=UserPublic,
+    response_model=DataResponse[UserPublic],
     status_code=status.HTTP_201_CREATED,
 )
 async def register(
     req: RegisterRequest,
     session: Annotated[AsyncSession, Depends(get_session)],
-) -> UserModel:
+) -> DataResponse[UserPublic]:
     email = normalize_email(str(req.email))
     user = UserModel(
         name=req.name.strip(),
@@ -207,19 +208,19 @@ async def register(
             detail="Email already registered",
         ) from exc
 
-    return user
+    return DataResponse(data=UserPublic.model_validate(user))
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login", response_model=DataResponse[TokenResponse])
 async def login(
     req: LoginRequest,
     response: Response,
     session: Annotated[AsyncSession, Depends(get_session)],
-) -> TokenResponse:
+) -> DataResponse[TokenResponse]:
     user = await _authenticate_user(session, str(req.email), req.password)
     if user.id is None:
         raise auth_error()
-    return _token_response(user.id, response)
+    return DataResponse(data=_token_response(user.id, response))
 
 
 @router.post("/token", response_model=TokenResponse)
@@ -234,13 +235,13 @@ async def token(
     return _token_response(user.id, response)
 
 
-@router.post("/refresh", response_model=TokenResponse)
+@router.post("/refresh", response_model=DataResponse[TokenResponse])
 async def refresh(
     response: Response,
     session: Annotated[AsyncSession, Depends(get_session)],
     redis: Annotated[Redis, Depends(get_auth_redis)],
     refresh_token: Annotated[str | None, Cookie(alias=REFRESH_COOKIE_NAME)] = None,
-) -> TokenResponse:
+) -> DataResponse[TokenResponse]:
     if refresh_token is None:
         raise auth_error()
 
@@ -254,14 +255,14 @@ async def refresh(
 
     if user.id is None:
         raise auth_error()
-    return _token_response(user.id, response)
+    return DataResponse(data=_token_response(user.id, response))
 
 
-@router.get("/me", response_model=UserPublic)
+@router.get("/me", response_model=DataResponse[UserPublic])
 async def me(
     current_user: Annotated[UserModel, Depends(get_current_user)],
-) -> UserModel:
-    return current_user
+) -> DataResponse[UserPublic]:
+    return DataResponse(data=UserPublic.model_validate(current_user))
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

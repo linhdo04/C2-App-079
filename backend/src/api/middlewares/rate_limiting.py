@@ -254,7 +254,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             content={
                 "error": "rate_limit_exceeded",
                 "message": f"Too many requests. Retry after {retry_after_s}s.",
-                "retry_after_s": retry_after_s,
+                "details": {
+                    "retry_after_seconds": retry_after_s,
+                },
             },
             headers={
                 "Retry-After": str(retry_after_s),

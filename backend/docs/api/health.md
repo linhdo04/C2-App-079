@@ -9,7 +9,9 @@ Response `200`:
 
 ```json
 {
-  "status": "healthy"
+  "data": {
+    "status": "healthy"
+  }
 }
 ```
 

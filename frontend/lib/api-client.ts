@@ -1,12 +1,15 @@
 "use client";
 
 import { readSession, saveSession } from "@/lib/auth-client";
+import type { ApiResponse } from "@/types/api";
 import type { StoredSession, TokenResponse } from "@/types/auth";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/$/, "") ?? "http://localhost:8000";
 
 type ApiErrorBody = {
   detail?: string;
+  message?: string;
+  error?: string;
 };
 
 type FetchInit = NonNullable<Parameters<typeof fetch>[1]>;
@@ -30,6 +33,9 @@ let refreshRequest: Promise<StoredSession> | null = null;
 async function parseError(response: Response): Promise<string> {
   try {
     const body = (await response.json()) as ApiErrorBody;
+    if (typeof body.message === "string" && body.message.length > 0) {
+      return body.message;
+    }
     if (typeof body.detail === "string" && body.detail.length > 0) {
       return body.detail;
     }
@@ -66,10 +72,10 @@ export async function requestApi<T>(path: string, init: FetchInit = {}, accessTo
 
 export function refreshSession(): Promise<StoredSession> {
   if (refreshRequest === null) {
-    refreshRequest = requestApi<TokenResponse>("/auth/refresh", {
+    refreshRequest = requestApi<ApiResponse<TokenResponse>>("/auth/refresh", {
       method: "POST",
     })
-      .then(saveSession)
+      .then((response) => saveSession(response.data))
       .finally(() => {
         refreshRequest = null;
       });

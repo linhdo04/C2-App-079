@@ -30,6 +30,7 @@ def test_api_prefix_is_applied_to_application_routes() -> None:
 
     assert f"{settings.api_prefix}/auth/login" in route_paths
     assert f"{settings.api_prefix}/agent/ask" in route_paths
+    assert f"{settings.api_prefix}/dashboard/telemetry" in route_paths
     assert f"{settings.api_prefix}/health" in route_paths
     assert f"{settings.api_prefix}/" not in route_paths
     assert "/auth/login" not in route_paths
@@ -45,7 +46,7 @@ async def test_health_check_is_public() -> None:
         response = await client.get(f"{settings.api_prefix}/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "healthy"}
+    assert response.json() == {"data": {"status": "healthy"}}
     assert "x-ratelimit-limit" not in response.headers
 
 
