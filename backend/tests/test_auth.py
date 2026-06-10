@@ -768,7 +768,8 @@ async def test_protected_routes_accept_valid_token(
     async def fake_current_user() -> UserModel:
         return user_factory()
 
-    async def fake_run_agent(question: str) -> str:
+    async def fake_run_agent(question: str, user_id: int) -> str:
+        assert user_id == 1
         return f"answer: {question}"
 
     app.dependency_overrides[get_current_user] = fake_current_user

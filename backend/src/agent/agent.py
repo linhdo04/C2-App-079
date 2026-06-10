@@ -3,25 +3,17 @@
 import logging
 import time
 from collections.abc import AsyncIterator
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, TypedDict, cast
 
 import structlog
 from langchain_core.messages import HumanMessage
 
-from .graph import graph
-from .nodes import execute_tools_node, route_intent_node, stream_synthesize_answer
+from .graph import graph, tool_graph
+from .nodes import stream_synthesize_answer
 from .state import AgentState
-from .tools import (
-    analyze_crop_data,
-    get_weather_forecast,
-    query_crop_database,
-    web_search,
-)
 
 logger = logging.getLogger(__name__)
 event_logger = structlog.get_logger(__name__)
-
-tools = [web_search, query_crop_database, get_weather_forecast, analyze_crop_data]
 
 StatusPhase = Literal["routing", "tool", "synthesis"]
 
@@ -35,14 +27,13 @@ class AgentStreamEvent(TypedDict, total=False):
 
 
 TOOL_STATUS_MESSAGES = {
-    "database": "Đang truy vấn dữ liệu...",
-    "weather": "Đang lấy dữ liệu thời tiết...",
+    "telemetry": "Đang phân tích nhiệt độ và độ ẩm...",
     "search": "Đang tìm kiếm...",
     "analysis": "Đang phân tích dữ liệu mùa vụ...",
 }
 
 
-async def run_agent(question: str) -> str:
+async def run_agent(question: str, user_id: int | None = None) -> str:
     """Run the agent with the provided question and return a string answer.
 
     Args:
@@ -57,6 +48,8 @@ async def run_agent(question: str) -> str:
             "question": question,
             "messages": [HumanMessage(content=question)],
         }
+        if user_id is not None:
+            initial_state["user_id"] = user_id
 
         # Invoke graph với state
         result = await graph.ainvoke(initial_state)
@@ -80,7 +73,10 @@ async def run_agent(question: str) -> str:
         raise
 
 
-async def stream_agent(question: str) -> AsyncIterator[AgentStreamEvent]:
+async def stream_agent(
+    question: str,
+    user_id: int | None = None,
+) -> AsyncIterator[AgentStreamEvent]:
     """Stream high-level progress and the synthesized answer."""
     started_at = time.perf_counter()
     try:
@@ -93,23 +89,31 @@ async def stream_agent(question: str) -> AsyncIterator[AgentStreamEvent]:
             "message": "Đang phân tích yêu cầu...",
         }
 
-        state: AgentState = {
+        initial_state: AgentState = {
             "question": question,
             "messages": [HumanMessage(content=question)],
         }
-        state.update(await route_intent_node(state))
+        if user_id is not None:
+            initial_state["user_id"] = user_id
+        state = cast(AgentState, dict(initial_state))
+        async for update in tool_graph.astream(initial_state, stream_mode="updates"):
+            route_update = update.get("route_intent")
+            if route_update is not None:
+                state.update(route_update)
+                for intent in route_update.get("intents", []):
+                    message = TOOL_STATUS_MESSAGES.get(intent)
+                    if message is not None:
+                        yield {
+                            "event": "status",
+                            "phase": "tool",
+                            "tool": intent,
+                            "message": message,
+                        }
 
-        for intent in state.get("intents", []):
-            message = TOOL_STATUS_MESSAGES.get(intent)
-            if message is not None:
-                yield {
-                    "event": "status",
-                    "phase": "tool",
-                    "tool": intent,
-                    "message": message,
-                }
+            tool_update = update.get("execute_tools")
+            if tool_update is not None:
+                state.update(tool_update)
 
-        state.update(await execute_tools_node(state))
         yield {
             "event": "status",
             "phase": "synthesis",
@@ -135,4 +139,4 @@ async def stream_agent(question: str) -> AsyncIterator[AgentStreamEvent]:
         )
 
 
-__all__ = ["AgentStreamEvent", "graph", "run_agent", "stream_agent", "tools"]
+__all__ = ["AgentStreamEvent", "graph", "run_agent", "stream_agent"]

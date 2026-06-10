@@ -30,6 +30,12 @@ from models import (
         (TelemetryModel, {"iot_node_id": 1, "longitude": -181}),
         (TelemetryModel, {"iot_node_id": 1, "velocity": -1}),
         (TelemetryModel, {"iot_node_id": 1, "heading": 360}),
+        (
+            TelemetryModel,
+            {"iot_node_id": 1, "temperature_celsius": -273.16},
+        ),
+        (TelemetryModel, {"iot_node_id": 1, "humidity_percent": -0.01}),
+        (TelemetryModel, {"iot_node_id": 1, "humidity_percent": 100.01}),
         (CoverageResultModel, {"coverage_percent": 101}),
     ],
 )
@@ -49,6 +55,13 @@ def test_models_accept_domain_boundaries() -> None:
         longitude=-180,
         velocity=0,
         heading=359.999,
+        temperature_celsius=-273.15,
+        humidity_percent=0,
+    )
+    assert TelemetryModel(
+        iot_node_id=1,
+        temperature_celsius=35.5,
+        humidity_percent=100,
     )
     assert CoverageResultModel(coverage_percent=0)
     assert CoverageResultModel(coverage_percent=100)
@@ -68,6 +81,8 @@ def test_model_constraints_are_declared() -> None:
             "ck_telemetry_longitude",
             "ck_telemetry_velocity",
             "ck_telemetry_heading",
+            "ck_telemetry_temperature_celsius",
+            "ck_telemetry_humidity_percent",
         },
         CoverageResultModel: {"ck_coverage_results_percent"},
     }

@@ -70,6 +70,28 @@ class FakeSession:
         self.committed = True
 
 
+class ExpiringUser:
+    def __init__(self, user_id: int) -> None:
+        self._user_id = user_id
+        self.expired = False
+
+    @property
+    def id(self) -> int:
+        if self.expired:
+            raise RuntimeError("expired ORM attribute accessed")
+        return self._user_id
+
+
+class ExpiringSession(FakeSession):
+    def __init__(self, user: ExpiringUser, execute_values: list[Any]) -> None:
+        super().__init__(execute_values)
+        self.user = user
+
+    async def rollback(self) -> None:
+        await super().rollback()
+        self.user.expired = True
+
+
 def user_factory(user_id: int = 7) -> UserModel:
     return UserModel(
         id=user_id,
@@ -140,24 +162,28 @@ async def test_create_chat_message_saves_question_and_answer(
     )
     session = FakeSession([chat, chat])
 
-    async def fake_run_agent(question: str) -> str:
-        assert question == "Dự báo thời tiết Hà Nội"
-        return "Trời có mưa nhẹ."
+    async def fake_run_agent(question: str, user_id: int) -> str:
+        assert question == "Phân tích nhiệt độ và độ ẩm"
+        assert user_id == 7
+        return "Nhiệt độ trung bình 30°C, độ ẩm trung bình 70%."
 
     monkeypatch.setattr("api.routes.agent_routes.run_agent", fake_run_agent)
 
     response = await create_chat_message(
         10,
-        AskRequest(question="  Dự báo thời tiết Hà Nội  "),
+        AskRequest(question="  Phân tích nhiệt độ và độ ẩm  "),
         user_factory(),
         session,  # type: ignore[arg-type]
     )
 
-    assert response.chat.title == "Dự báo thời tiết Hà Nội"
+    assert response.chat.title == "Phân tích nhiệt độ và độ ẩm"
     assert response.user_message.role == ChatRole.USER
-    assert response.user_message.message == "Dự báo thời tiết Hà Nội"
+    assert response.user_message.message == "Phân tích nhiệt độ và độ ẩm"
     assert response.assistant_message.role == ChatRole.ASSISTANT
-    assert response.assistant_message.message == "Trời có mưa nhẹ."
+    assert (
+        response.assistant_message.message
+        == "Nhiệt độ trung bình 30°C, độ ẩm trung bình 70%."
+    )
     assert "FOR UPDATE" in str(session.statements[1])
     assert session.statements[1].get_execution_options()["populate_existing"] is True
 
@@ -169,7 +195,7 @@ async def test_create_chat_message_does_not_persist_partial_history_on_agent_err
     chat = ChatSessionModel(id=10, user_id=7, title="Cuộc trò chuyện mới")
     session = FakeSession([chat])
 
-    async def failing_run_agent(question: str) -> str:
+    async def failing_run_agent(question: str, user_id: int) -> str:
         raise RuntimeError("agent unavailable")
 
     monkeypatch.setattr("api.routes.agent_routes.run_agent", failing_run_agent)
@@ -191,10 +217,12 @@ async def test_stream_chat_message_emits_tokens_and_persists_done_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     chat = ChatSessionModel(id=10, user_id=7, title="Cuộc trò chuyện mới")
-    session = FakeSession([chat, chat])
+    current_user = ExpiringUser(7)
+    session = ExpiringSession(current_user, [chat, chat])
 
-    async def fake_stream_agent(question: str) -> Any:
+    async def fake_stream_agent(question: str, user_id: int) -> Any:
         assert question == "Tư vấn lúa"
+        assert user_id == 7
         yield {
             "event": "status",
             "phase": "routing",
@@ -211,9 +239,12 @@ async def test_stream_chat_message_emits_tokens_and_persists_done_event(
     response = await stream_chat_message(
         10,
         AskRequest(question="Tư vấn lúa"),
-        user_factory(),
+        current_user,  # type: ignore[arg-type]
         session,  # type: ignore[arg-type]
     )
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.headers["connection"] == "keep-alive"
+    assert response.headers["x-accel-buffering"] == "no"
     chunks = [response_chunk_text(chunk) async for chunk in response.body_iterator]
     body = "".join(chunks)
 
@@ -238,7 +269,7 @@ async def test_stream_chat_message_rolls_back_and_emits_error(
     chat = ChatSessionModel(id=10, user_id=7, title="Cuộc trò chuyện mới")
     session = FakeSession([chat])
 
-    async def failing_stream_agent(question: str) -> Any:
+    async def failing_stream_agent(question: str, user_id: int) -> Any:
         if False:
             yield ""
         raise RuntimeError("stream unavailable")

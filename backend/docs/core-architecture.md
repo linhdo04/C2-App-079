@@ -41,14 +41,14 @@ FastAPI app (`src/api/main.py`)
   +-- POST /agent/ask
         |
         v
-      run_agent(question)
+      run_agent(question, user_id)
         |
         v
-      LangGraph: database -> search -> weather -> END
+      LangGraph: route_intent -> execute_tools -> synthesize_answer -> END
         |
-        +-- PostgreSQL via SQLModel/asyncpg
+        +-- PostgreSQL telemetry via SQLModel/asyncpg
         +-- Tavily web search
-        +-- Open-Meteo forecast
+        +-- Gemini answer synthesis
 ```
 
 ## Application Lifecycle
@@ -230,7 +230,7 @@ Các bảng hiện có:
 | `UserModel` | `users` | `name`, `email` unique |
 | `MissionModel` | `missions` | owner user, status, started/ended timestamps |
 | `IoTNodeModel` | `iot_nodes` | serial number unique, location, metadata JSON |
-| `TelemetryModel` | `telemetry` | node telemetry, timestamp, location, motion fields, data JSON |
+| `TelemetryModel` | `telemetry` | node telemetry, timestamp, location, motion, temperature, humidity, data JSON |
 | `FlightPathModel` | `flight_paths` | mission path JSON, distance, duration, flown flag |
 | `CoverageResultModel` | `coverage_results` | mission/path coverage percentage and details JSON |
 | `ReportModel` | `reports` | mission report, author, content, summary, attachments JSON |
@@ -293,23 +293,22 @@ Current request flow:
 
 ```text
 POST /agent/ask
-  -> run_agent(question)
+  -> run_agent(question, current_user.id)
   -> HumanMessage(question)
   -> graph.ainvoke(initial_state)
-  -> database node
-  -> search node
-  -> weather node
-  -> response content from last ToolMessage
+  -> route intent
+  -> execute selected tools
+  -> synthesize answer with Gemini
+  -> state["answer"]
 ```
 
 Important current behavior:
 
-- Graph workflow is fixed: `database -> search -> weather -> END`.
-- Graph does not perform intent routing.
-- Gemini client is initialized in `agent.py`, but the graph currently does not
-  call the LLM.
-- `SYSTEM_PROMPT` exists in `prompts.py`, but is not injected into graph state.
-- `analyze_crop_data` is exported from tools but is not connected to the graph.
+- Telemetry intent reads temperature and humidity observations from PostgreSQL.
+- Telemetry queries are filtered through mission ownership using current user ID.
+- Telemetry observations are historical measurements, not weather forecasts.
+- Search uses Tavily; crop analysis uses values extracted from the question.
+- Gemini synthesizes the final answer from tool results and tool limitations.
 
 For agent implementation details, use:
 

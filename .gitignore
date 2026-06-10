@@ -22,3 +22,5 @@ build/
 checkpoints/
 .idea/
 .vscode/
+skills-lock.json
+.agents/skills/
