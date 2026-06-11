@@ -25,9 +25,11 @@ Response `201` trả user public:
 
 ```json
 {
-  "id": 1,
-  "name": "Nguyen Van A",
-  "email": "user@example.com"
+  "data": {
+    "id": 1,
+    "name": "Nguyen Van A",
+    "email": "user@example.com"
+  }
 }
 ```
 
@@ -48,10 +50,12 @@ Response:
 
 ```json
 {
-  "access_token": "...",
-  "token_type": "bearer",
-  "expires_in": 3600,
-  "refresh_expires_in": 2592000
+  "data": {
+    "access_token": "...",
+    "token_type": "bearer",
+    "expires_in": 3600,
+    "refresh_expires_in": 2592000
+  }
 }
 ```
 
@@ -62,12 +66,13 @@ Response cũng set cookie `refresh_token=<jwt>` với `HttpOnly`,
 ### POST /auth/token
 
 OAuth2 password form endpoint. Dùng `username` làm email và `password` làm mật
-khẩu. Response giống `/auth/login`.
+khẩu. Endpoint này giữ response token OAuth2 ở top-level, không dùng envelope
+`data`, để tương thích OAuth2 clients.
 
 ### POST /auth/refresh
 
 Đọc refresh token từ HttpOnly cookie `refresh_token`; request body không được
-dùng. Response giống `/auth/login` và `/auth/token` và set refresh cookie mới.
+dùng. Response giống `/auth/login` và set refresh cookie mới.
 Refresh token là rotating token: mỗi lần refresh thành công sẽ revoke refresh
 token cũ trong Redis. Refresh token cũ, hết hạn, sai chữ ký, sai loại token,
 hoặc thuộc user đã bị xóa/legacy đều bị từ chối.
@@ -82,7 +87,7 @@ Yêu cầu header:
 Authorization: Bearer <access_token>
 ```
 
-Trả user hiện tại.
+Trả user hiện tại trong `data`.
 
 ### POST /auth/logout
 

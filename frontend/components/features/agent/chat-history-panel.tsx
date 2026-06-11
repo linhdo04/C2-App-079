@@ -9,14 +9,17 @@ import type { User } from "@/types/auth";
 type ChatHistoryPanelProps = {
   activeChatId: number | null;
   chats: ChatSession[];
+  hasMore: boolean;
   isDeleting: boolean;
   isLoading: boolean;
+  isLoadingMore: boolean;
   isOpen: boolean;
   search: string;
   user: User;
   onClose: () => void;
   onDelete: (chatId: number) => void;
   onLogout: () => void;
+  onLoadMore: () => void;
   onNewChat: () => void;
   onOpen: () => void;
   onSearchChange: (value: string) => void;
@@ -26,14 +29,17 @@ type ChatHistoryPanelProps = {
 export function ChatHistoryPanel({
   activeChatId,
   chats,
+  hasMore,
   isDeleting,
   isLoading,
+  isLoadingMore,
   isOpen,
   search,
   user,
   onClose,
   onDelete,
   onLogout,
+  onLoadMore,
   onNewChat,
   onOpen,
   onSearchChange,
@@ -121,32 +127,44 @@ export function ChatHistoryPanel({
               </p>
             </div>
           ) : (
-            chats.map((chat) => (
-              <div
-                className={cn(
-                  "group flex min-h-11 items-center rounded-lg",
-                  activeChatId === chat.id ? "bg-secondary text-foreground" : "hover:bg-secondary/65",
-                )}
-                key={chat.id}
-              >
-                <button
-                  className="min-w-0 flex-1 px-3 py-2.5 text-left"
-                  type="button"
-                  onClick={() => onSelect(chat.id)}
+            <>
+              {chats.map((chat) => (
+                <div
+                  className={cn(
+                    "group flex min-h-11 items-center rounded-lg",
+                    activeChatId === chat.id ? "bg-secondary text-foreground" : "hover:bg-secondary/65",
+                  )}
+                  key={chat.id}
                 >
-                  <span className="block truncate text-sm text-secondary-foreground">{chat.title}</span>
-                </button>
+                  <button
+                    className="min-w-0 flex-1 px-3 py-2.5 text-left"
+                    type="button"
+                    onClick={() => onSelect(chat.id)}
+                  >
+                    <span className="block truncate text-sm text-secondary-foreground">{chat.title}</span>
+                  </button>
+                  <button
+                    className="mr-1 grid size-9 shrink-0 place-items-center rounded-lg text-muted-foreground opacity-100 hover:bg-destructive-muted hover:text-destructive-text focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none lg:opacity-0 lg:group-hover:opacity-100"
+                    type="button"
+                    disabled={isDeleting}
+                    aria-label={`Xoá ${chat.title}`}
+                    onClick={() => onDelete(chat.id)}
+                  >
+                    <Trash2 className="size-4" />
+                  </button>
+                </div>
+              ))}
+              {hasMore && (
                 <button
-                  className="mr-1 grid size-9 shrink-0 place-items-center rounded-lg text-muted-foreground opacity-100 hover:bg-destructive-muted hover:text-destructive-text focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none lg:opacity-0 lg:group-hover:opacity-100"
+                  className="mt-2 min-h-11 w-full rounded-lg px-3 text-xs font-bold text-muted-foreground hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none disabled:opacity-50"
                   type="button"
-                  disabled={isDeleting}
-                  aria-label={`Xoá ${chat.title}`}
-                  onClick={() => onDelete(chat.id)}
+                  disabled={isLoadingMore}
+                  onClick={onLoadMore}
                 >
-                  <Trash2 className="size-4" />
+                  {isLoadingMore ? "Đang tải thêm..." : "Tải thêm"}
                 </button>
-              </div>
-            ))
+              )}
+            </>
           )}
         </div>
 

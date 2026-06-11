@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, Column, DateTime
+from sqlalchemy import JSON, CheckConstraint, Column, DateTime, Index, text
 from sqlmodel import Field
 
 from .base import BaseModel
@@ -17,6 +17,11 @@ class IoTNodeModel(BaseModel, table=True):
         CheckConstraint(
             "longitude IS NULL OR longitude BETWEEN -180 AND 180",
             name="ck_iot_nodes_longitude",
+        ),
+        Index(
+            "ix_iot_nodes_active_mission_id",
+            "mission_id",
+            postgresql_where=text("deleted_at IS NULL"),
         ),
     )
 

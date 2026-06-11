@@ -99,7 +99,10 @@ def test_model_constraints_are_declared() -> None:
 
 def test_foreign_keys_and_time_series_queries_are_indexed() -> None:
     expected_indexes = {
-        MissionModel: {"ix_missions_owner_id"},
+        MissionModel: {
+            "ix_missions_owner_id",
+            "ix_missions_active_owner_id",
+        },
         ChatHistoryModel: {
             "ix_chat_histories_mission_id",
             "ix_chat_histories_user_id",
@@ -111,10 +114,14 @@ def test_foreign_keys_and_time_series_queries_are_indexed() -> None:
             "ix_chat_sessions_user_id_updated_at",
         },
         FlightPathModel: {"ix_flight_paths_mission_id"},
-        IoTNodeModel: {"ix_iot_nodes_mission_id"},
+        IoTNodeModel: {
+            "ix_iot_nodes_mission_id",
+            "ix_iot_nodes_active_mission_id",
+        },
         TelemetryModel: {
             "ix_telemetry_iot_node_id",
             "ix_telemetry_iot_node_id_timestamp",
+            "ix_telemetry_active_environment_timestamp_node",
         },
         CoverageResultModel: {
             "ix_coverage_results_mission_id",

@@ -1,16 +1,21 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import Any, cast
 
 import structlog
 from fastapi import APIRouter, Depends, FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from core import settings, setup_logging
 from infrastructure import close_db, close_redis, get_redis, init_db, init_redis
 
 from .dependencies import get_current_user
 from .middlewares import error_handling, logging, rate_limiting
-from .routes import agent_router, auth_router
+from .responses import ERROR_RESPONSES, DataResponse
+from .routes import agent_router, auth_router, dashboard_router
 
 
 @asynccontextmanager
@@ -29,7 +34,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await close_redis()
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(
+    lifespan=lifespan,
+    responses=ERROR_RESPONSES,
+)
+app.add_exception_handler(
+    RequestValidationError,
+    cast(Any, error_handling.validation_exception_handler),
+)
+app.add_exception_handler(
+    StarletteHTTPException,
+    cast(Any, error_handling.http_exception_handler),
+)
 app.add_middleware(logging.RequestLoggingMiddleware)
 app.add_middleware(
     rate_limiting.RateLimitMiddleware,
@@ -59,11 +75,23 @@ api_router.include_router(
     agent_router,
     dependencies=[Depends(get_current_user)],
 )
+api_router.include_router(
+    dashboard_router,
+    dependencies=[Depends(get_current_user)],
+)
 
 
-@api_router.get("/health", tags=["health"])
-def health_check() -> dict[str, str]:
-    return {"status": "healthy"}
+class HealthStatus(BaseModel):
+    status: str
+
+
+@api_router.get(
+    "/health",
+    tags=["health"],
+    response_model=DataResponse[HealthStatus],
+)
+def health_check() -> DataResponse[HealthStatus]:
+    return DataResponse(data=HealthStatus(status="healthy"))
 
 
 app.include_router(api_router)

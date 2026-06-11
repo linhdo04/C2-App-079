@@ -1,17 +1,23 @@
+import base64
+import binascii
+import hashlib
+import hmac
 import json
 from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Annotated, Any, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import ColumnElement, exists, or_, select
+from sqlalchemy import ColumnElement, and_, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
 from agent.agent import graph as _graph
 from agent.agent import run_agent, stream_agent
 from api.dependencies import get_current_user
+from api.responses import CollectionMeta, CollectionResponse, DataResponse
+from core import settings
 from infrastructure.database.postgres import get_session
 from models.base import get_utc_now
 from models.chat_history import ChatHistoryModel, ChatRole
@@ -60,6 +66,97 @@ class ChatMessageResponse(BaseModel):
     chat: ChatSessionPublic
     user_message: ChatMessagePublic
     assistant_message: ChatMessagePublic
+
+
+class AgentAnswerPublic(BaseModel):
+    answer: str
+
+
+class ChatCursorMeta(CollectionMeta):
+    limit: int
+    has_more: bool
+    next_cursor: str | None
+
+
+class ChatListResponse(CollectionResponse[ChatSessionPublic]):
+    meta: ChatCursorMeta
+
+
+class ChatCursor(BaseModel):
+    version: int
+    updated_at: datetime
+    chat_id: int
+    search_digest: str
+
+
+def _chat_search_digest(search: str) -> str:
+    return hmac.new(
+        settings.jwt_secret_key.encode(),
+        f"chat-cursor-search:{search}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _encode_chat_cursor(chat: ChatSessionPublic, search: str) -> str:
+    payload = (
+        ChatCursor(
+            version=2,
+            updated_at=chat.updated_at,
+            chat_id=chat.id,
+            search_digest=_chat_search_digest(search),
+        )
+        .model_dump_json()
+        .encode()
+    )
+    signature = hmac.digest(
+        settings.jwt_secret_key.encode(),
+        payload,
+        hashlib.sha256,
+    )
+    encoded_payload = base64.urlsafe_b64encode(payload).decode().rstrip("=")
+    encoded_signature = base64.urlsafe_b64encode(signature).decode().rstrip("=")
+    return f"{encoded_payload}.{encoded_signature}"
+
+
+def _decode_chat_cursor(cursor: str, search: str) -> ChatCursor:
+    try:
+        encoded_payload, encoded_signature = cursor.split(".", maxsplit=1)
+        payload_padding = "=" * (-len(encoded_payload) % 4)
+        signature_padding = "=" * (-len(encoded_signature) % 4)
+        payload = base64.b64decode(
+            encoded_payload + payload_padding,
+            altchars=b"-_",
+            validate=True,
+        )
+        signature = base64.b64decode(
+            encoded_signature + signature_padding,
+            altchars=b"-_",
+            validate=True,
+        )
+        expected_signature = hmac.digest(
+            settings.jwt_secret_key.encode(),
+            payload,
+            hashlib.sha256,
+        )
+        if not hmac.compare_digest(signature, expected_signature):
+            raise ValueError("Invalid cursor signature")
+        decoded = ChatCursor.model_validate_json(payload)
+    except (binascii.Error, UnicodeDecodeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid pagination cursor",
+        ) from exc
+
+    valid_search = hmac.compare_digest(
+        decoded.search_digest,
+        _chat_search_digest(search),
+    )
+    if decoded.version != 2 or decoded.chat_id <= 0 or not valid_search:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid pagination cursor",
+        )
+    return decoded
 
 
 def _active_chat_statement(
@@ -157,11 +254,11 @@ def _sse_event(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-@router.post("/agent/ask")
+@router.post("/agent/ask", response_model=DataResponse[AgentAnswerPublic])
 async def ask(
     req: AskRequest,
     current_user: Annotated[UserModel, Depends(get_current_user)],
-) -> dict[str, Any]:
+) -> DataResponse[AgentAnswerPublic]:
     """Endpoint để hỏi agent bằng ngôn ngữ tự nhiên.
 
     Trả về JSON: {"answer": "..."}
@@ -171,21 +268,21 @@ async def ask(
         if current_user.id is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
         result = await run_agent(req.question, current_user.id)
-        return {"answer": result}
+        return DataResponse(data=AgentAnswerPublic(answer=result))
     except Exception as exc:  # pragma: no cover - bubble up runtime errors
         raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.post(
     "/agent/chats",
-    response_model=ChatSessionPublic,
+    response_model=DataResponse[ChatSessionPublic],
     status_code=status.HTTP_201_CREATED,
 )
 async def create_chat(
     req: ChatCreateRequest,
     current_user: Annotated[UserModel, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
-) -> ChatSessionModel:
+) -> DataResponse[ChatSessionPublic]:
     if current_user.id is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
@@ -194,15 +291,20 @@ async def create_chat(
     session.add(chat)
     await session.flush()
     await session.refresh(chat)
-    return chat
+    return DataResponse(data=ChatSessionPublic.model_validate(chat))
 
 
-@router.get("/agent/chats", response_model=list[ChatSessionPublic])
+@router.get(
+    "/agent/chats",
+    response_model=ChatListResponse,
+)
 async def list_chats(
     current_user: Annotated[UserModel, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
-    search: str | None = None,
-) -> list[ChatSessionModel]:
+    search: Annotated[str | None, Query(max_length=120)] = None,
+    cursor: Annotated[str | None, Query(min_length=1, max_length=2048)] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> ChatListResponse:
     if current_user.id is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
@@ -236,18 +338,63 @@ async def list_chats(
             )
         )
 
+    if cursor is not None:
+        decoded_cursor = _decode_chat_cursor(cursor, normalized_search)
+        statement = statement.where(
+            or_(
+                cast(
+                    ColumnElement[bool],
+                    ChatSessionModel.updated_at < decoded_cursor.updated_at,
+                ),
+                and_(
+                    cast(
+                        ColumnElement[bool],
+                        ChatSessionModel.updated_at == decoded_cursor.updated_at,
+                    ),
+                    cast(
+                        ColumnElement[bool],
+                        cast(Any, ChatSessionModel.id) < decoded_cursor.chat_id,
+                    ),
+                ),
+            )
+        )
+
     result = await session.execute(
-        statement.order_by(cast(Any, ChatSessionModel.updated_at).desc())
+        statement.order_by(
+            cast(Any, ChatSessionModel.updated_at).desc(),
+            cast(Any, ChatSessionModel.id).desc(),
+        ).limit(limit + 1)
     )
-    return list(result.scalars().all())
+    fetched_chats = [
+        ChatSessionPublic.model_validate(chat) for chat in result.scalars().all()
+    ]
+    has_more = len(fetched_chats) > limit
+    chats = fetched_chats[:limit]
+    next_cursor = (
+        _encode_chat_cursor(chats[-1], normalized_search)
+        if has_more and chats
+        else None
+    )
+    return ChatListResponse(
+        data=chats,
+        meta=ChatCursorMeta(
+            count=len(chats),
+            limit=limit,
+            has_more=has_more,
+            next_cursor=next_cursor,
+        ),
+    )
 
 
-@router.get("/agent/chats/{chat_id}", response_model=ChatDetailPublic)
+@router.get(
+    "/agent/chats/{chat_id}",
+    response_model=DataResponse[ChatDetailPublic],
+)
 async def get_chat(
     chat_id: int,
     current_user: Annotated[UserModel, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
-) -> ChatDetailPublic:
+) -> DataResponse[ChatDetailPublic]:
     if current_user.id is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
@@ -266,15 +413,17 @@ async def get_chat(
         )
         .order_by(cast(Any, ChatHistoryModel.timestamp).asc())
     )
-    return ChatDetailPublic(
-        id=cast(int, chat.id),
-        title=chat.title,
-        created_at=chat.created_at,
-        updated_at=chat.updated_at,
-        messages=[
-            ChatMessagePublic.model_validate(message)
-            for message in messages_result.scalars().all()
-        ],
+    return DataResponse(
+        data=ChatDetailPublic(
+            id=cast(int, chat.id),
+            title=chat.title,
+            created_at=chat.created_at,
+            updated_at=chat.updated_at,
+            messages=[
+                ChatMessagePublic.model_validate(message)
+                for message in messages_result.scalars().all()
+            ],
+        )
     )
 
 
@@ -298,14 +447,14 @@ async def delete_chat(
 
 @router.post(
     "/agent/chats/{chat_id}/messages",
-    response_model=ChatMessageResponse,
+    response_model=DataResponse[ChatMessageResponse],
 )
 async def create_chat_message(
     chat_id: int,
     req: AskRequest,
     current_user: Annotated[UserModel, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
-) -> ChatMessageResponse:
+) -> DataResponse[ChatMessageResponse]:
     if current_user.id is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
@@ -316,12 +465,14 @@ async def create_chat_message(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    return await _persist_chat_exchange(
-        session,
-        chat_id,
-        current_user.id,
-        question,
-        answer,
+    return DataResponse(
+        data=await _persist_chat_exchange(
+            session,
+            chat_id,
+            current_user.id,
+            question,
+            answer,
+        )
     )
 
 
@@ -350,11 +501,17 @@ async def stream_chat_message(
                 if event_name == "token":
                     content = event.get("content", "")
                     answer_parts.append(content)
-                    yield _sse_event("token", {"content": content})
+                    yield _sse_event("token", {"data": {"content": content}})
                 else:
                     yield _sse_event(
                         "status",
-                        {key: value for key, value in event.items() if key != "event"},
+                        {
+                            "data": {
+                                key: value
+                                for key, value in event.items()
+                                if key != "event"
+                            }
+                        },
                     )
 
             answer = "".join(answer_parts)
@@ -371,11 +528,17 @@ async def stream_chat_message(
             await session.commit()
             yield _sse_event(
                 "done",
-                result.model_dump(mode="json"),
+                {"data": result.model_dump(mode="json")},
             )
         except Exception as exc:
             await session.rollback()
-            yield _sse_event("error", {"detail": str(exc)})
+            yield _sse_event(
+                "error",
+                {
+                    "error": "stream_error",
+                    "message": str(exc),
+                },
+            )
 
     return StreamingResponse(
         event_stream(),

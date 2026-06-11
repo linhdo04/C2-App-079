@@ -43,7 +43,7 @@ export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
   const isAuthenticated = authStatus === "authenticated";
   const currentUserQuery = useCurrentUserQuery(isAuthenticated);
   const chatsQuery = useChatsQuery(isAuthenticated, deferredSearch);
-  const chats = useMemo(() => chatsQuery.data ?? [], [chatsQuery.data]);
+  const chats = useMemo(() => chatsQuery.data?.pages.flatMap((page) => page.data) ?? [], [chatsQuery.data]);
   const chatQuery = useChatQuery(isAuthenticated, chatId);
   const createChatMutation = useCreateChatMutation();
   const deleteChatMutation = useDeleteChatMutation();
@@ -204,23 +204,26 @@ export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
         },
         (event) => {
           if (event.event === "token") {
-            const token = event.data as { content?: unknown };
-            if (typeof token.content === "string") {
+            const payload = event.data as { data?: { content?: unknown } };
+            const token = payload.data;
+            if (typeof token?.content === "string") {
               setStreamingStatus("");
               queueToken(token.content);
             }
           } else if (event.event === "status") {
-            const status = event.data as { message?: unknown };
-            if (typeof status.message === "string") {
+            const payload = event.data as { data?: { message?: unknown } };
+            const status = payload.data;
+            if (typeof status?.message === "string") {
               setStreamingStatus(status.message);
             }
           } else if (event.event === "done") {
             flushTokenBuffer();
-            completedResponse = event.data as ChatMessageResponse;
+            const payload = event.data as { data?: ChatMessageResponse };
+            completedResponse = payload.data ?? null;
           } else if (event.event === "error") {
-            const streamErrorData = event.data as { detail?: unknown };
+            const streamErrorData = event.data as { message?: unknown };
             streamError =
-              typeof streamErrorData.detail === "string" ? streamErrorData.detail : "Luồng phản hồi bị gián đoạn.";
+              typeof streamErrorData.message === "string" ? streamErrorData.message : "Luồng phản hồi bị gián đoạn.";
           }
         },
       );
@@ -327,13 +330,16 @@ export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
         activeChatId={chatId}
         chats={chats}
         isDeleting={deleteChatMutation.isPending}
+        hasMore={chatsQuery.hasNextPage === true}
         isLoading={chatsQuery.isLoading}
+        isLoadingMore={chatsQuery.isFetchingNextPage}
         isOpen={isHistoryOpen}
         search={search}
         user={user}
         onClose={() => setIsHistoryOpen(false)}
         onDelete={handleDelete}
         onLogout={handleLogout}
+        onLoadMore={() => chatsQuery.fetchNextPage()}
         onNewChat={handleNewChat}
         onOpen={() => setIsHistoryOpen(true)}
         onSearchChange={setSearch}

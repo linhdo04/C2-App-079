@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import CheckConstraint, Column, DateTime, String
+from sqlalchemy import CheckConstraint, Column, DateTime, Index, String, text
 from sqlmodel import Field
 
 from .base import BaseModel
@@ -24,6 +24,11 @@ class MissionModel(BaseModel, table=True):
         CheckConstraint(
             "ended_at IS NULL OR started_at IS NULL OR ended_at >= started_at",
             name="ck_missions_date_order",
+        ),
+        Index(
+            "ix_missions_active_owner_id",
+            "owner_id",
+            postgresql_where=text("deleted_at IS NULL"),
         ),
     )
 

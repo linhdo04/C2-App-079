@@ -1,35 +1,45 @@
 "use client";
 
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
 import { requestApi, requestProtected } from "@/lib/api-client";
+import type { ApiResponse, CursorMeta } from "@/types/api";
 import type { AgentAskRequest, AgentResponse, ChatDetail, ChatMessageResponse, ChatSession } from "@/types/agent";
 import type { LoginRequest, RegisterRequest, TokenResponse, User } from "@/types/auth";
+import type { TelemetryResponse } from "@/types/dashboard";
 
 export function useCurrentUserQuery(isAuthenticated: boolean) {
   return useQuery({
     enabled: isAuthenticated,
     queryKey: ["auth", "me"],
-    queryFn: () => requestProtected<User>("/auth/me"),
+    queryFn: () => requestProtected<ApiResponse<User>>("/auth/me").then((response) => response.data),
+  });
+}
+
+export function useDashboardTelemetryQuery() {
+  return useQuery({
+    queryKey: ["dashboard", "telemetry"],
+    queryFn: () => requestProtected<TelemetryResponse>("/dashboard/telemetry?limit=24"),
+    refetchInterval: 60_000,
   });
 }
 
 export function useRegisterMutation() {
   return useMutation({
     mutationFn: (body: RegisterRequest) =>
-      requestApi<User>("/auth/register", {
+      requestApi<ApiResponse<User>>("/auth/register", {
         method: "POST",
         body: JSON.stringify(body),
-      }),
+      }).then((response) => response.data),
   });
 }
 
 export function useLoginMutation() {
   return useMutation({
     mutationFn: (body: LoginRequest) =>
-      requestApi<TokenResponse>("/auth/login", {
+      requestApi<ApiResponse<TokenResponse>>("/auth/login", {
         method: "POST",
         body: JSON.stringify(body),
-      }),
+      }).then((response) => response.data),
   });
 }
 
@@ -45,24 +55,31 @@ export function useLogoutMutation() {
 export function useAgentAskMutation() {
   return useMutation({
     mutationFn: (body: AgentAskRequest) =>
-      requestProtected<AgentResponse>("/agent/ask", {
+      requestProtected<ApiResponse<AgentResponse>>("/agent/ask", {
         method: "POST",
         body: JSON.stringify(body),
-      }),
+      }).then((response) => response.data),
   });
 }
 
 export function useChatsQuery(isAuthenticated: boolean, search: string) {
-  const searchParams = new URLSearchParams();
-  if (search.trim().length > 0) {
-    searchParams.set("search", search.trim());
-  }
-  const queryString = searchParams.toString();
+  const normalizedSearch = search.trim();
 
-  return useQuery({
+  return useInfiniteQuery({
     enabled: isAuthenticated,
-    queryKey: ["agent", "chats", search.trim()],
-    queryFn: () => requestProtected<ChatSession[]>(`/agent/chats${queryString.length > 0 ? `?${queryString}` : ""}`),
+    queryKey: ["agent", "chats", normalizedSearch],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => {
+      const searchParams = new URLSearchParams({ limit: "20" });
+      if (normalizedSearch.length > 0) {
+        searchParams.set("search", normalizedSearch);
+      }
+      if (pageParam !== null) {
+        searchParams.set("cursor", pageParam);
+      }
+      return requestProtected<ApiResponse<ChatSession[], CursorMeta>>(`/agent/chats?${searchParams.toString()}`);
+    },
+    getNextPageParam: (lastPage) => lastPage.meta.next_cursor ?? undefined,
   });
 }
 
@@ -70,17 +87,18 @@ export function useChatQuery(isAuthenticated: boolean, chatId: number | null) {
   return useQuery({
     enabled: isAuthenticated && chatId !== null,
     queryKey: ["agent", "chats", chatId],
-    queryFn: () => requestProtected<ChatDetail>(`/agent/chats/${chatId}`),
+    queryFn: () =>
+      requestProtected<ApiResponse<ChatDetail>>(`/agent/chats/${chatId}`).then((response) => response.data),
   });
 }
 
 export function useCreateChatMutation() {
   return useMutation({
     mutationFn: () =>
-      requestProtected<ChatSession>("/agent/chats", {
+      requestProtected<ApiResponse<ChatSession>>("/agent/chats", {
         method: "POST",
         body: JSON.stringify({}),
-      }),
+      }).then((response) => response.data),
   });
 }
 
@@ -96,9 +114,9 @@ export function useDeleteChatMutation() {
 export function useSendChatMessageMutation() {
   return useMutation({
     mutationFn: ({ body, chatId }: { body: AgentAskRequest; chatId: number }) =>
-      requestProtected<ChatMessageResponse>(`/agent/chats/${chatId}/messages`, {
+      requestProtected<ApiResponse<ChatMessageResponse>>(`/agent/chats/${chatId}/messages`, {
         method: "POST",
         body: JSON.stringify(body),
-      }),
+      }).then((response) => response.data),
   });
 }

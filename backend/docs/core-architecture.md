@@ -128,7 +128,9 @@ Response thành công:
 
 ```json
 {
-  "answer": "string"
+  "data": {
+    "answer": "string"
+  }
 }
 ```
 
@@ -137,7 +139,8 @@ Any` vẫn còn trong file route nhưng không tham gia xử lý request hiện 
 
 `src/api/main.py` cũng khai báo:
 
-- `GET /api/health` trả `{"status": "healthy"}` và không yêu cầu xác thực.
+- `GET /api/health` trả `{"data":{"status":"healthy"}}` và không yêu cầu xác
+  thực.
 
 Hiện chưa có route `/metrics`, dù rate limiter đang exclude các
 path này.

@@ -408,7 +408,9 @@ async def test_register_success_normalizes_email_and_hides_password_hash() -> No
     )
 
     assert response.status_code == 201
-    assert response.json() == {"id": 1, "name": "User", "email": "user@example.com"}
+    assert response.json() == {
+        "data": {"id": 1, "name": "User", "email": "user@example.com"}
+    }
     assert session.added_user is not None
     assert session.added_user.password_hash != "password123"
 
@@ -441,6 +443,11 @@ async def test_register_validates_password_length() -> None:
     )
 
     assert response.status_code == 422
+    body = response.json()
+    assert body["error"] == "validation_error"
+    assert body["message"] == "Request validation failed."
+    assert isinstance(body["details"], list)
+    assert body["details"][0]["field"] == "body → password"
 
 
 @pytest.mark.asyncio
@@ -462,8 +469,12 @@ async def test_login_json_and_oauth_form_return_valid_tokens() -> None:
 
     assert json_response.status_code == 200
     assert form_response.status_code == 200
-    for response in (json_response, form_response):
-        body = response.json()
+    for response, is_oauth_response in (
+        (json_response, False),
+        (form_response, True),
+    ):
+        response_body = response.json()
+        body = response_body if is_oauth_response else response_body["data"]
         assert body["token_type"] == "bearer"
         assert body["expires_in"] == 3600
         assert body["refresh_expires_in"] == 2_592_000
@@ -494,7 +505,7 @@ async def test_refresh_rotates_refresh_token_and_returns_new_pair() -> None:
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response.json()["data"]
     assert "refresh_token" not in body
     assert decode_access_token(body["access_token"])["sub"] == "1"
     new_refresh_token = response.cookies.get("refresh_token")
@@ -619,7 +630,10 @@ async def test_login_failures_use_same_401_response(user: UserModel | None) -> N
 
     assert response.status_code == 401
     assert response.headers["WWW-Authenticate"] == "Bearer"
-    assert response.json()["detail"] == "Could not validate credentials"
+    assert response.json() == {
+        "error": "unauthorized",
+        "message": "Could not validate credentials",
+    }
 
 
 @pytest.mark.asyncio
@@ -634,7 +648,9 @@ async def test_me_returns_current_user() -> None:
     )
 
     assert response.status_code == 200
-    assert response.json() == {"id": 1, "name": "User", "email": "user@example.com"}
+    assert response.json() == {
+        "data": {"id": 1, "name": "User", "email": "user@example.com"}
+    }
 
 
 @pytest.mark.asyncio
@@ -787,4 +803,4 @@ async def test_protected_routes_accept_valid_token(
         app.dependency_overrides.clear()
 
     assert agent_response.status_code == 200
-    assert agent_response.json() == {"answer": "answer: hello"}
+    assert agent_response.json() == {"data": {"answer": "answer: hello"}}

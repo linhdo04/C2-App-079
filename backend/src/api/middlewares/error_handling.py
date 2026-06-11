@@ -4,6 +4,7 @@ from typing import Any
 import structlog
 from fastapi import HTTPException
 from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -11,6 +12,74 @@ from starlette.responses import JSONResponse, Response
 from core import get_correlation_id
 
 _logger = structlog.get_logger("error_handler")
+
+
+def validation_error_response(exc: RequestValidationError) -> JSONResponse:
+    errors = [
+        {
+            "field": " → ".join(str(loc) for loc in err["loc"]),
+            "message": err["msg"],
+            "type": err["type"],
+        }
+        for err in exc.errors()
+    ]
+
+    _logger.warning(
+        "validation_error",
+        error_count=len(errors),
+        fields=[error["field"] for error in errors],
+        correlation_id=get_correlation_id(),
+    )
+
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": "validation_error",
+            "message": "Request validation failed.",
+            "details": errors,
+        },
+    )
+
+
+def http_error_response(exc: StarletteHTTPException) -> JSONResponse:
+    message = exc.detail if isinstance(exc.detail, str) else "Request failed."
+    log = _logger.bind(
+        status_code=exc.status_code,
+        detail=exc.detail,
+        correlation_id=get_correlation_id(),
+    )
+
+    if exc.status_code >= 500:
+        log.error("http_exception_server")
+    elif exc.status_code >= 400:
+        log.warning("http_exception_client")
+
+    content: dict[str, Any] = {
+        "error": _status_to_error_code(exc.status_code),
+        "message": message,
+    }
+    if not isinstance(exc.detail, str):
+        content["details"] = exc.detail
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=content,
+        headers=dict(exc.headers) if exc.headers else {},
+    )
+
+
+async def validation_exception_handler(
+    _request: Request,
+    exc: RequestValidationError,
+) -> JSONResponse:
+    return validation_error_response(exc)
+
+
+async def http_exception_handler(
+    _request: Request,
+    exc: StarletteHTTPException,
+) -> JSONResponse:
+    return http_error_response(exc)
 
 
 class ErrorHandlingMiddleware(BaseHTTPMiddleware):
@@ -34,51 +103,10 @@ class ErrorHandlingMiddleware(BaseHTTPMiddleware):
             return self._handle_unexpected_error(request, exc)
 
     def _handle_validation_error(self, exc: RequestValidationError) -> JSONResponse:
-        errors = [
-            {
-                "field": " → ".join(str(loc) for loc in err["loc"]),
-                "message": err["msg"],
-                "type": err["type"],
-            }
-            for err in exc.errors()
-        ]
-
-        _logger.warning(
-            "validation_error",
-            error_count=len(errors),
-            fields=[e["field"] for e in errors],
-            correlation_id=get_correlation_id(),
-        )
-
-        return JSONResponse(
-            status_code=422,
-            content={
-                "error": "validation_error",
-                "message": "Request validation failed.",
-                "details": errors,
-            },
-        )
+        return validation_error_response(exc)
 
     def _handle_http_exception(self, exc: HTTPException) -> JSONResponse:
-        log = _logger.bind(
-            status_code=exc.status_code,
-            detail=exc.detail,
-            correlation_id=get_correlation_id(),
-        )
-
-        if exc.status_code >= 500:
-            log.error("http_exception_server")
-        elif exc.status_code >= 400:
-            log.warning("http_exception_client")
-
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={
-                "error": _status_to_error_code(exc.status_code),
-                "message": exc.detail,
-            },
-            headers=dict(exc.headers) if exc.headers else {},
-        )
+        return http_error_response(exc)
 
     def _handle_unexpected_error(
         self, request: Request, exc: Exception

@@ -1,4 +1,6 @@
-from datetime import UTC, datetime
+import base64
+import json
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -7,6 +9,9 @@ from fastapi import HTTPException
 from api.routes.agent_routes import (
     AskRequest,
     ChatCreateRequest,
+    ChatSessionPublic,
+    _decode_chat_cursor,
+    _encode_chat_cursor,
     _get_active_chat,
     _title_from_question,
     create_chat,
@@ -111,15 +116,16 @@ def response_chunk_text(chunk: str | bytes | memoryview[int]) -> str:
 async def test_create_chat_uses_authenticated_user() -> None:
     session = FakeSession()
 
-    chat = await create_chat(
+    response = await create_chat(
         ChatCreateRequest(),
         user_factory(),
         session,  # type: ignore[arg-type]
     )
+    chat = response.data
 
     assert chat.id == 1
-    assert chat.user_id == 7
     assert chat.title == "Cuộc trò chuyện mới"
+    assert session.added[0].user_id == 7
 
 
 @pytest.mark.asyncio
@@ -136,17 +142,160 @@ async def test_get_active_chat_rejects_missing_or_unowned_chat() -> None:
 async def test_list_chats_searches_titles_and_message_content() -> None:
     session = FakeSession([[]])
 
-    chats = await list_chats(
+    response = await list_chats(
         user_factory(),
         session,  # type: ignore[arg-type]
         search="lúa",
     )
 
     statement = str(session.statements[0])
-    assert chats == []
+    assert response.data == []
+    assert response.meta.count == 0
+    assert response.meta.has_more is False
+    assert response.meta.next_cursor is None
+    assert response.meta.limit == 20
     assert "chat_sessions.title" in statement
     assert "chat_histories.message" in statement
     assert "chat_histories.chat_session_id = chat_sessions.id" in statement
+
+
+@pytest.mark.asyncio
+async def test_list_chats_returns_stable_cursor_page() -> None:
+    now = datetime.now(UTC)
+    chats = [
+        ChatSessionModel(
+            id=3,
+            user_id=7,
+            title="Newest",
+            updated_at=now,
+        ),
+        ChatSessionModel(
+            id=2,
+            user_id=7,
+            title="Same timestamp",
+            updated_at=now,
+        ),
+        ChatSessionModel(
+            id=1,
+            user_id=7,
+            title="Older",
+            updated_at=now - timedelta(microseconds=1),
+        ),
+    ]
+    session = FakeSession([chats])
+
+    response = await list_chats(
+        user_factory(),
+        session,  # type: ignore[arg-type]
+        limit=2,
+    )
+
+    assert [chat.id for chat in response.data] == [3, 2]
+    assert response.meta.count == 2
+    assert response.meta.limit == 2
+    assert response.meta.has_more is True
+    assert response.meta.next_cursor is not None
+    decoded = _decode_chat_cursor(response.meta.next_cursor, "")
+    assert decoded.updated_at == now
+    assert decoded.chat_id == 2
+    statement = session.statements[0]
+    assert statement._limit_clause.value == 3
+    statement_text = str(statement)
+    assert "chat_sessions.updated_at DESC, chat_sessions.id DESC" in statement_text
+
+
+@pytest.mark.asyncio
+async def test_list_chats_applies_cursor_tie_breaker() -> None:
+    now = datetime.now(UTC)
+    cursor = _encode_chat_cursor(
+        ChatSessionPublic(
+            id=8,
+            title="Cursor",
+            created_at=now,
+            updated_at=now,
+        ),
+        "lúa",
+    )
+    session = FakeSession([[]])
+
+    await list_chats(
+        user_factory(),
+        session,  # type: ignore[arg-type]
+        search=" lúa ",
+        cursor=cursor,
+        limit=20,
+    )
+
+    statement_text = str(session.statements[0])
+    assert "chat_sessions.updated_at <" in statement_text
+    assert "chat_sessions.updated_at =" in statement_text
+    assert "chat_sessions.id <" in statement_text
+
+
+def test_chat_cursor_does_not_expose_search_text() -> None:
+    now = datetime.now(UTC)
+    sensitive_search = "confidential crop failure"
+    cursor = _encode_chat_cursor(
+        ChatSessionPublic(
+            id=8,
+            title="Cursor",
+            created_at=now,
+            updated_at=now,
+        ),
+        sensitive_search,
+    )
+
+    encoded_payload = cursor.split(".", maxsplit=1)[0]
+    padding = "=" * (-len(encoded_payload) % 4)
+    payload = json.loads(base64.urlsafe_b64decode(encoded_payload + padding))
+
+    assert payload["version"] == 2
+    assert payload["search_digest"] != sensitive_search
+    assert sensitive_search not in json.dumps(payload)
+    assert _decode_chat_cursor(cursor, sensitive_search).chat_id == 8
+
+
+@pytest.mark.asyncio
+async def test_list_chats_rejects_invalid_or_mismatched_cursor() -> None:
+    session = FakeSession()
+
+    with pytest.raises(HTTPException) as invalid_exc:
+        await list_chats(
+            user_factory(),
+            session,  # type: ignore[arg-type]
+            cursor="not-a-cursor",
+        )
+    assert invalid_exc.value.status_code == 400
+
+    now = datetime.now(UTC)
+    cursor = _encode_chat_cursor(
+        ChatSessionPublic(
+            id=1,
+            title="Cursor",
+            created_at=now,
+            updated_at=now,
+        ),
+        "rice",
+    )
+    with pytest.raises(HTTPException) as mismatch_exc:
+        await list_chats(
+            user_factory(),
+            session,  # type: ignore[arg-type]
+            search="lúa",
+            cursor=cursor,
+        )
+    assert mismatch_exc.value.status_code == 400
+
+    tampered_cursor = f"{cursor[:-1]}{'A' if cursor[-1] != 'A' else 'B'}"
+    with pytest.raises(HTTPException) as tampered_exc:
+        await list_chats(
+            user_factory(),
+            session,  # type: ignore[arg-type]
+            search="rice",
+            cursor=tampered_cursor,
+        )
+    assert tampered_exc.value.status_code == 400
+    assert session.statements == []
 
 
 @pytest.mark.asyncio
@@ -169,12 +318,13 @@ async def test_create_chat_message_saves_question_and_answer(
 
     monkeypatch.setattr("api.routes.agent_routes.run_agent", fake_run_agent)
 
-    response = await create_chat_message(
+    envelope = await create_chat_message(
         10,
         AskRequest(question="  Phân tích nhiệt độ và độ ẩm  "),
         user_factory(),
         session,  # type: ignore[arg-type]
     )
+    response = envelope.data
 
     assert response.chat.title == "Phân tích nhiệt độ và độ ẩm"
     assert response.user_message.role == ChatRole.USER
@@ -249,12 +399,13 @@ async def test_stream_chat_message_emits_tokens_and_persists_done_event(
     body = "".join(chunks)
 
     assert (
-        'event: status\ndata: {"phase": "routing", '
-        '"message": "Đang phân tích yêu cầu..."}'
+        'event: status\ndata: {"data": {"phase": "routing", '
+        '"message": "Đang phân tích yêu cầu..."}}'
     ) in body
-    assert 'event: token\ndata: {"content": "Xin "}' in body
-    assert 'event: token\ndata: {"content": "chào"}' in body
+    assert 'event: token\ndata: {"data": {"content": "Xin "}}' in body
+    assert 'event: token\ndata: {"data": {"content": "chào"}}' in body
     assert "event: done" in body
+    assert '"data": {"chat":' in body
     assert '"message": "Xin chào"' in body
     assert session.rollback_count == 1
     assert session.committed is True
@@ -289,6 +440,8 @@ async def test_stream_chat_message_rolls_back_and_emits_error(
     body = "".join(chunks)
 
     assert "event: error" in body
+    assert '"error": "stream_error"' in body
+    assert '"message": "stream unavailable"' in body
     assert "stream unavailable" in body
     assert session.rollback_count == 2
     assert session.added == []
