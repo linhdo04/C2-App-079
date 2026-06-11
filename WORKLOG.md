@@ -2,6 +2,64 @@
 
 ---
 
+## 2026-06-11 — A* transit routing (RCPP + BECD), multi-region RCPP coverage, enriched waypoint/mission JSON
+
+### What was reviewed
+Two issues were flagged against the BECD A* implementation:
+
+1. **A* fallback ignores obstacles when max_iter is hit** — real but acceptable. The
+   straight-line fallback only triggers when `_line_free` already confirmed the
+   direct path is blocked AND A* exhausted its 50k-node budget — i.e. the two
+   points are genuinely separated by a large obstacle with no nearby gap. The
+   fallback is the only sane option (the alternative is leaving a coverage gap),
+   and the point is tagged `is_transit=True` so it's visible in the simulation.
+
+2. **A* forces start/goal cells open in the downsampled grid** — false positive.
+   Start/goal points always come from the traversable mask (`trav`), so they can
+   never be deep inside a hard obstacle; the forced-open only corrects for
+   max-pool downsampling rounding at the safety-margin border.
+
+Also reviewed: RCPP previously had **no obstacle-aware transit routing** — only
+sweep segments were obstacle-free, but the straight-line moves between segments
+and sweep lines could cross obstacles. And RCPP only covered the **single
+largest** farmland contour, silently dropping all other disconnected farmland
+patches.
+
+### Changes made
+- **`path_planner.py`**:
+  - Added module-level `_line_free()` (Bresenham-style straight-line obstacle
+    check) and `_astar()` (A* on a max-pool downsampled obstacle grid, 8-directional,
+    `step=8`, `max_iter=50_000`).
+  - **BECD**: `_cover_cells` now routes every inter-cell transition through
+    `_line_free` → `_astar` → straight-line fallback. Prints
+    `[BECD] A* rerouted N / M inter-cell transition(s).`
+  - **RCPP**: `_boustrophedon` now stitches every segment/sweep gap with the same
+    `_line_free`/`_astar`/fallback logic. Prints `[RCPP] A* rerouted N / M transit(s).`
+  - **RCPP multi-region coverage**: `_largest_farmland_contour` →
+    `_farmland_contours`, returning *all* farmland contours above a minimum area
+    (~80x80px, filters noise), largest first. `plan()` sweeps each region at its
+    own optimal angle and stitches regions together with A*. Prints
+    `[RCPP] Covered N farmland region(s).`
+  - Added `astar_step: int = 8` constructor arg to both planners.
+- **`inference.py`**:
+  - Added `enrich_waypoints()` — adds `heading`, `dist_from_prev_px`,
+    `cumulative_dist_px` to each waypoint for web simulation playback.
+  - Added `save_mission_json()` — exports `_mission_{suffix}.json` with image
+    dimensions, planner name, total waypoints/distance, and coverage stats.
+- **`cách chạy.txt`**: documented the new planner flags, output files, waypoint
+  and mission JSON schemas, and the shared A* obstacle-avoidance behaviour.
+
+### Test run
+Re-ran segmentation + both planners on `M-33-32-B-b-4-4.tif` (9098x9621),
+saved to `results/M-33-32-B-b-4-4/` (old single-region RCPP outputs removed):
+- Coverage: background/farmland 78.1%, woodland 9.8%, water 10.6%, road 1.5%
+- RCPP: 83,188 waypoints across multiple farmland regions
+- BECD: 1431 cells, 16,986 waypoints, 329/757 inter-cell transitions A*-rerouted
+
+### Status
+- Model checkpoint: `checkpoints/best_model.pth` — ResNet34, epoch 25, val mIoU **0.8236**
+- Next: integrate enriched waypoint/mission JSON into the web simulation
+
 ## 2026-06-09 — Bug fixes & transit waypoint tagging
 
 ### What was reviewed

@@ -1,0 +1,31 @@
+{
+  "image": {
+    "width": 9098,
+    "height": 9621
+  },
+  "planner": "becd",
+  "total_waypoints": 16986,
+  "total_dist_px": 2171107.58,
+  "coverage": {
+    "background": {
+      "pixels": 68350767,
+      "percent": 78.09
+    },
+    "building": {
+      "pixels": 2720,
+      "percent": 0.0
+    },
+    "woodland": {
+      "pixels": 8565795,
+      "percent": 9.79
+    },
+    "water": {
+      "pixels": 9284596,
+      "percent": 10.61
+    },
+    "road": {
+      "pixels": 1327980,
+      "percent": 1.52
+    }
+  }
+}
