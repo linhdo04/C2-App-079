@@ -17,7 +17,7 @@ flowchart LR
 
   subgraph AGENT[Agent Layer]
     AG[LangChain Agent (graph)]
-    TO[Tools: web_search, query_crop_database, get_weather_forecast]
+    TO[Tools: web_search, analyze_crop_data, analyze_environment_telemetry]
   end
 
   A --> R
@@ -41,5 +41,5 @@ flowchart LR
     A -->|router| AG
     AG -->|calls| TO
     AG -->|reads/writes| PG
-    TO -->|may call| web[External web]
+    TO -->|search only| web[External web]
   end

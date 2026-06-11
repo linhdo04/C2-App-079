@@ -7,6 +7,7 @@ from redis.exceptions import RedisError
 from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core import settings
 from core.security import (
     LEGACY_PASSWORD_HASH,
     TokenError,
@@ -16,7 +17,9 @@ from infrastructure.cache.redis import get_redis
 from infrastructure.database.postgres import get_session
 from models.user import UserModel
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
+oauth2_scheme = OAuth2PasswordBearer(
+    tokenUrl=f"{settings.api_prefix}/auth/token",
+)
 
 
 def auth_error() -> HTTPException:

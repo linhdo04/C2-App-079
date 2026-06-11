@@ -1,5 +1,6 @@
 from .base import BaseModel
 from .chat_history import ChatHistoryModel
+from .chat_session import ChatSessionModel
 from .coverage_result import CoverageResultModel
 from .flight_path import FlightPathModel
 from .iot_node import IoTNodeModel
@@ -17,5 +18,6 @@ __all__ = [
     "CoverageResultModel",
     "ReportModel",
     "ChatHistoryModel",
+    "ChatSessionModel",
     "BaseModel",
 ]

@@ -1,36 +1,60 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Autonomous Drones Frontend
 
-## Getting Started
+Next.js 16 frontend for authentication and the agricultural AI Agent workspace.
 
-First, run the development server:
+## Development
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+bun install
+bun run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## UI Library
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Reusable UI primitives live in `components/ui`. They follow the shadcn/ui source-owned component model and use Radix
+UI where an accessible primitive is required. Theme tokens are defined as CSS variables in `app/globals.css`.
 
-## Learn More
+Available components:
 
-To learn more about Next.js, take a look at the following resources:
+- `Button`: `default`, `secondary`, `outline`, `ghost`, `destructive`, and `link` variants; supports `asChild`.
+- `Card`: header, title, description, content, and footer composition.
+- `Alert`: `default`, `success`, and `destructive` variants.
+- `Input` and `Textarea`: native form props with focus, invalid, and disabled states.
+- `Field`: label, description, and validation error composition.
+- `Spinner`: accessible loading indicator.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Example:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```tsx
+import { Button } from "@/components/ui/button";
+import { Field, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 
-## Deploy on Vercel
+<Field>
+  <FieldLabel htmlFor="email">Email</FieldLabel>
+  <Input
+    id="email"
+    type="email"
+  />
+  <Button type="submit">Submit</Button>
+</Field>;
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Add another shadcn component from the `frontend` directory:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+bunx shadcn@latest add <component>
+```
+
+Review generated styles against the existing agricultural theme before using the component.
+
+## Verification
+
+```bash
+bun run lint:check
+bun run format:fix
+bun run format:check
+bun run build
+```

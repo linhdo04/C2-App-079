@@ -2,9 +2,11 @@
 
 import asyncio
 import re
-from collections.abc import Awaitable, Callable
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
+import structlog
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
@@ -13,43 +15,26 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
+from core import settings
+
 from .llm import llm
 from .prompts import SYSTEM_PROMPT
 from .state import AgentState
-from .tools import (
-    analyze_crop_data,
-    get_weather_forecast,
-    query_crop_database,
-    web_search,
-)
+from .tools import analyze_crop_data, analyze_environment_telemetry, web_search
 
-ToolRunner = Callable[[str], Awaitable[str]]
+ToolRunner = Callable[[str, int | None], Awaitable[str]]
+logger = structlog.get_logger(__name__)
 
-DATABASE_KEYWORDS = (
-    "user",
-    "users",
-    "người dùng",
-    "người-dùng",
-    "email",
-    "họ tên",
-    "tên người dùng",
-    "tên user",
-    "name",
-)
-WEATHER_KEYWORDS = (
+TELEMETRY_KEYWORDS = (
     "thời tiết",
-    "dự báo",
-    "mưa",
     "nhiệt độ",
-    "nắng",
     "nóng",
     "lạnh",
     "ẩm",
-    "khô hạn",
-    "bão",
-    "áp thấp",
-    "weather",
-    "forecast",
+    "độ ẩm",
+    "cảm biến",
+    "telemetry",
+    "môi trường",
 )
 ANALYSIS_KEYWORDS = (
     "diện tích",
@@ -119,11 +104,8 @@ def _route_intents(question: str) -> list[str]:
     ql = _normalize_text(question)
     intents: list[str] = []
 
-    if _has_keyword(ql, DATABASE_KEYWORDS):
-        intents.append("database")
-
-    if _has_keyword(ql, WEATHER_KEYWORDS):
-        intents.append("weather")
+    if _has_keyword(ql, TELEMETRY_KEYWORDS):
+        intents.append("telemetry")
 
     if _has_keyword(ql, ANALYSIS_KEYWORDS):
         intents.append("analysis")
@@ -135,15 +117,6 @@ def _route_intents(question: str) -> list[str]:
         intents.append("general")
 
     return intents
-
-
-def _extract_location(question: str) -> str:
-    ql = _normalize_text(question)
-    if "hà nội" in ql or "hanoi" in ql:
-        return "Hanoi"
-    if "hồ chí minh" in ql or "tp.hcm" in ql or "tphcm" in ql or "saigon" in ql:
-        return "Ho Chi Minh"
-    return "Hanoi"
 
 
 def _extract_crop_data(question: str) -> dict[str, Any]:
@@ -165,18 +138,25 @@ def _extract_crop_data(question: str) -> dict[str, Any]:
     }
 
 
-def _extract_number_near_keywords(text: str, keywords: tuple[str, ...]) -> float:
+def _extract_number_near_keywords(
+    text: str,
+    keywords: tuple[str, ...],
+) -> float | None:
     normalized = _normalize_text(text)
+    matches: list[tuple[int, float]] = []
     for keyword in keywords:
         keyword_pattern = _numeric_keyword_pattern(keyword)
-        match = re.search(
+        for match in re.finditer(
             rf"(?:{NUMBER_PATTERN}\s*{keyword_pattern})"
             rf"|(?:{keyword_pattern}\s*{NUMBER_PATTERN})",
             normalized,
-        )
-        if match:
-            return float(next(group for group in match.groups() if group is not None))
-    return 0.0
+        ):
+            value = float(next(group for group in match.groups() if group is not None))
+            matches.append((match.start(), value))
+
+    if not matches:
+        return None
+    return min(matches, key=lambda item: item[0])[1]
 
 
 async def _run_sync_tool_in_thread(tool_input: dict[str, Any]) -> str:
@@ -187,28 +167,44 @@ async def _run_sync_tool_in_thread(tool_input: dict[str, Any]) -> str:
 async def _run_tool(
     name: str,
     question: str,
+    user_id: int | None,
     runner: ToolRunner,
 ) -> tuple[str, str | None, str | None]:
+    started_at = time.perf_counter()
     try:
-        result = await runner(question)
+        result = await asyncio.wait_for(
+            runner(question, user_id),
+            timeout=settings.agent_tool_timeout_seconds,
+        )
         return name, result, None
+    except TimeoutError:
+        logger.warning("agent_tool_timed_out", tool=name)
+        return name, None, "timeout"
     except Exception as exc:  # pragma: no cover - exercised through graph tests
-        return name, None, str(exc)
+        logger.warning(
+            "agent_tool_failed",
+            tool=name,
+            error_type=type(exc).__name__,
+        )
+        return name, None, "unavailable"
+    finally:
+        logger.info(
+            "agent_tool_completed",
+            tool=name,
+            duration_ms=round((time.perf_counter() - started_at) * 1000, 2),
+        )
 
 
-async def _database_runner(question: str) -> str:
-    result = await query_crop_database.ainvoke({"query": question})
-    return str(result)
-
-
-async def _weather_runner(question: str) -> str:
-    result = await get_weather_forecast.ainvoke(
-        {"location": _extract_location(question), "days": 7}
+async def _telemetry_runner(question: str, user_id: int | None) -> str:
+    if user_id is None:
+        return "Không thể truy vấn telemetry khi thiếu thông tin người dùng."
+    result = await analyze_environment_telemetry.ainvoke(
+        {"user_id": user_id, "limit": 50}
     )
     return str(result)
 
 
-async def _search_runner(question: str) -> str:
+async def _search_runner(question: str, user_id: int | None = None) -> str:
     if hasattr(web_search, "ainvoke"):
         try:
             result = await web_search.ainvoke({"query": question})
@@ -218,7 +214,7 @@ async def _search_runner(question: str) -> str:
     return await _run_sync_tool_in_thread({"query": question})
 
 
-async def _analysis_runner(question: str) -> str:
+async def _analysis_runner(question: str, user_id: int | None = None) -> str:
     result = await analyze_crop_data.ainvoke({"data": _extract_crop_data(question)})
     return str(result)
 
@@ -269,6 +265,77 @@ def _fallback_answer(
     return f"Tôi chưa có đủ dữ liệu để trả lời câu hỏi này. Câu hỏi đã nhận: {question}"
 
 
+def _synthesis_messages(state: AgentState) -> list[BaseMessage]:
+    question = _question_from_state(state)
+    tool_context = _format_tool_context(
+        dict(state.get("tool_results", {})),
+        dict(state.get("tool_errors", {})),
+    )
+    return [
+        SystemMessage(content=SYSTEM_PROMPT),
+        HumanMessage(
+            content=(
+                f"Câu hỏi người dùng:\n{question}\n\n"
+                f"{tool_context}\n\n"
+                "Hãy trả lời ngắn gọn, thực tế, bằng tiếng Việt. "
+                "Nếu một nguồn dữ liệu lỗi hoặc không có dữ liệu, hãy nêu rõ hạn chế."
+            )
+        ),
+    ]
+
+
+def _message_content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            str(block.get("text", ""))
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+    return str(content or "")
+
+
+async def stream_synthesize_answer(state: AgentState) -> AsyncIterator[str]:
+    """Stream the final Gemini answer, with fallback before the first token."""
+    question = _question_from_state(state)
+    tool_results = dict(state.get("tool_results", {}))
+    tool_errors = dict(state.get("tool_errors", {}))
+    emitted = False
+
+    try:
+        async with asyncio.timeout(settings.agent_llm_timeout_seconds):
+            async for chunk in llm.astream(_synthesis_messages(state)):
+                content = _message_content_text(getattr(chunk, "content", ""))
+                if content:
+                    emitted = True
+                    yield content
+    except TimeoutError:
+        logger.warning(
+            "agent_llm_timed_out",
+            operation="stream",
+            emitted=emitted,
+        )
+        if emitted:
+            raise
+        yield _fallback_answer(question, tool_results, tool_errors)
+        return
+    except Exception as exc:
+        logger.warning(
+            "agent_llm_failed",
+            operation="stream",
+            error_type=type(exc).__name__,
+            emitted=emitted,
+        )
+        if emitted:
+            raise
+        yield _fallback_answer(question, tool_results, tool_errors)
+        return
+
+    if not emitted:
+        yield _fallback_answer(question, tool_results, tool_errors)
+
+
 async def route_intent_node(state: AgentState) -> AgentState:
     """Detect which tools are useful for the original question."""
     question = _question_from_state(state)
@@ -278,11 +345,11 @@ async def route_intent_node(state: AgentState) -> AgentState:
 async def execute_tools_node(state: AgentState) -> AgentState:
     """Run selected tools and keep their outputs separate from chat messages."""
     question = _question_from_state(state)
+    user_id = state.get("user_id")
     intents = state.get("intents", ["general"])
 
     runners: dict[str, ToolRunner] = {
-        "database": _database_runner,
-        "weather": _weather_runner,
+        "telemetry": _telemetry_runner,
         "search": _search_runner,
         "analysis": _analysis_runner,
     }
@@ -291,12 +358,19 @@ async def execute_tools_node(state: AgentState) -> AgentState:
     tool_errors: dict[str, str] = dict(state.get("tool_errors", {}))
     tool_messages: list[BaseMessage] = []
 
+    selected_tools: list[tuple[str, ToolRunner]] = []
     for intent in intents:
         runner = runners.get(intent)
-        if runner is None:
-            continue
+        if runner is not None:
+            selected_tools.append((intent, runner))
 
-        name, result, error = await _run_tool(intent, question, runner)
+    tool_outputs = await asyncio.gather(
+        *(
+            _run_tool(intent, question, user_id, runner)
+            for intent, runner in selected_tools
+        )
+    )
+    for name, result, error in tool_outputs:
         if result is not None:
             tool_results[name] = result
             tool_messages.append(ToolMessage(content=result, tool_call_id=name))
@@ -315,24 +389,22 @@ async def synthesize_answer_node(state: AgentState) -> AgentState:
     question = _question_from_state(state)
     tool_results = dict(state.get("tool_results", {}))
     tool_errors = dict(state.get("tool_errors", {}))
-    tool_context = _format_tool_context(tool_results, tool_errors)
-
-    messages = [
-        SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(
-            content=(
-                f"Câu hỏi người dùng:\n{question}\n\n"
-                f"{tool_context}\n\n"
-                "Hãy trả lời ngắn gọn, thực tế, bằng tiếng Việt. "
-                "Nếu một nguồn dữ liệu lỗi hoặc không có dữ liệu, hãy nêu rõ hạn chế."
-            )
-        ),
-    ]
 
     try:
-        response = await llm.ainvoke(messages)
-        answer = str(getattr(response, "content", "") or "")
-    except Exception:
+        response = await asyncio.wait_for(
+            llm.ainvoke(_synthesis_messages(state)),
+            timeout=settings.agent_llm_timeout_seconds,
+        )
+        answer = _message_content_text(getattr(response, "content", ""))
+    except TimeoutError:
+        logger.warning("agent_llm_timed_out", operation="invoke")
+        answer = _fallback_answer(question, tool_results, tool_errors)
+    except Exception as exc:
+        logger.warning(
+            "agent_llm_failed",
+            operation="invoke",
+            error_type=type(exc).__name__,
+        )
         answer = _fallback_answer(question, tool_results, tool_errors)
 
     if not answer:
@@ -344,5 +416,6 @@ async def synthesize_answer_node(state: AgentState) -> AgentState:
 __all__ = [
     "execute_tools_node",
     "route_intent_node",
+    "stream_synthesize_answer",
     "synthesize_answer_node",
 ]

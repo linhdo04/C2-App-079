@@ -398,7 +398,7 @@ async def test_register_success_normalizes_email_and_hides_password_hash() -> No
 
     response = await request(
         "POST",
-        "/auth/register",
+        f"{settings.api_prefix}/auth/register",
         session=session,
         json={
             "name": "User",
@@ -408,7 +408,9 @@ async def test_register_success_normalizes_email_and_hides_password_hash() -> No
     )
 
     assert response.status_code == 201
-    assert response.json() == {"id": 1, "name": "User", "email": "user@example.com"}
+    assert response.json() == {
+        "data": {"id": 1, "name": "User", "email": "user@example.com"}
+    }
     assert session.added_user is not None
     assert session.added_user.password_hash != "password123"
 
@@ -419,7 +421,7 @@ async def test_register_duplicate_email_returns_409() -> None:
 
     response = await request(
         "POST",
-        "/auth/register",
+        f"{settings.api_prefix}/auth/register",
         session=session,
         json={
             "name": "User",
@@ -436,11 +438,16 @@ async def test_register_duplicate_email_returns_409() -> None:
 async def test_register_validates_password_length() -> None:
     response = await request(
         "POST",
-        "/auth/register",
+        f"{settings.api_prefix}/auth/register",
         json={"name": "User", "email": "user@example.com", "password": "short"},
     )
 
     assert response.status_code == 422
+    body = response.json()
+    assert body["error"] == "validation_error"
+    assert body["message"] == "Request validation failed."
+    assert isinstance(body["details"], list)
+    assert body["details"][0]["field"] == "body → password"
 
 
 @pytest.mark.asyncio
@@ -449,21 +456,25 @@ async def test_login_json_and_oauth_form_return_valid_tokens() -> None:
 
     json_response = await request(
         "POST",
-        "/auth/login",
+        f"{settings.api_prefix}/auth/login",
         session=session,
         json={"email": "user@example.com", "password": "password123"},
     )
     form_response = await request(
         "POST",
-        "/auth/token",
+        f"{settings.api_prefix}/auth/token",
         session=session,
         data={"username": "user@example.com", "password": "password123"},
     )
 
     assert json_response.status_code == 200
     assert form_response.status_code == 200
-    for response in (json_response, form_response):
-        body = response.json()
+    for response, is_oauth_response in (
+        (json_response, False),
+        (form_response, True),
+    ):
+        response_body = response.json()
+        body = response_body if is_oauth_response else response_body["data"]
         assert body["token_type"] == "bearer"
         assert body["expires_in"] == 3600
         assert body["refresh_expires_in"] == 2_592_000
@@ -473,7 +484,7 @@ async def test_login_json_and_oauth_form_return_valid_tokens() -> None:
         assert "refresh_token=" in set_cookie
         assert "HttpOnly" in set_cookie
         assert "samesite=lax" in set_cookie.lower()
-        assert "Path=/auth" in set_cookie
+        assert f"Path={settings.api_prefix}/auth" in set_cookie
         refresh_cookie = response.cookies.get("refresh_token")
         assert refresh_cookie is not None
         assert decode_refresh_token(refresh_cookie)["sub"] == "1"
@@ -487,14 +498,14 @@ async def test_refresh_rotates_refresh_token_and_returns_new_pair() -> None:
 
     response = await request(
         "POST",
-        "/auth/refresh",
+        f"{settings.api_prefix}/auth/refresh",
         session=FakeSession([user_factory()]),
         redis=redis,
         cookies={"refresh_token": refresh_token},
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response.json()["data"]
     assert "refresh_token" not in body
     assert decode_access_token(body["access_token"])["sub"] == "1"
     new_refresh_token = response.cookies.get("refresh_token")
@@ -510,7 +521,7 @@ async def test_refresh_rotates_refresh_token_and_returns_new_pair() -> None:
 async def test_refresh_rejects_missing_cookie() -> None:
     response = await request(
         "POST",
-        "/auth/refresh",
+        f"{settings.api_prefix}/auth/refresh",
         session=FakeSession([user_factory()]),
     )
 
@@ -525,14 +536,14 @@ async def test_refresh_rejects_old_token_after_rotation() -> None:
 
     first_response = await request(
         "POST",
-        "/auth/refresh",
+        f"{settings.api_prefix}/auth/refresh",
         session=FakeSession([user_factory()]),
         redis=redis,
         cookies={"refresh_token": refresh_token},
     )
     second_response = await request(
         "POST",
-        "/auth/refresh",
+        f"{settings.api_prefix}/auth/refresh",
         session=FakeSession([user_factory()]),
         redis=redis,
         cookies={"refresh_token": refresh_token},
@@ -552,7 +563,7 @@ async def test_refresh_rejects_revoked_token() -> None:
 
     response = await request(
         "POST",
-        "/auth/refresh",
+        f"{settings.api_prefix}/auth/refresh",
         session=FakeSession([user_factory()]),
         redis=redis,
         cookies={"refresh_token": refresh_token},
@@ -577,7 +588,7 @@ async def test_refresh_rejects_missing_deleted_or_legacy_user(
 
     response = await request(
         "POST",
-        "/auth/refresh",
+        f"{settings.api_prefix}/auth/refresh",
         session=session,
         cookies={"refresh_token": refresh_token},
     )
@@ -593,7 +604,7 @@ async def test_refresh_fails_closed_when_redis_unavailable() -> None:
 
     response = await request(
         "POST",
-        "/auth/refresh",
+        f"{settings.api_prefix}/auth/refresh",
         session=FakeSession([user_factory()]),
         redis=redis,
         cookies={"refresh_token": refresh_token},
@@ -612,14 +623,17 @@ async def test_login_failures_use_same_401_response(user: UserModel | None) -> N
 
     response = await request(
         "POST",
-        "/auth/login",
+        f"{settings.api_prefix}/auth/login",
         session=session,
         json={"email": "user@example.com", "password": "password123"},
     )
 
     assert response.status_code == 401
     assert response.headers["WWW-Authenticate"] == "Bearer"
-    assert response.json()["detail"] == "Could not validate credentials"
+    assert response.json() == {
+        "error": "unauthorized",
+        "message": "Could not validate credentials",
+    }
 
 
 @pytest.mark.asyncio
@@ -628,13 +642,15 @@ async def test_me_returns_current_user() -> None:
 
     response = await request(
         "GET",
-        "/auth/me",
+        f"{settings.api_prefix}/auth/me",
         session=FakeSession([user_factory()]),
         headers={"Authorization": f"Bearer {token}"},
     )
 
     assert response.status_code == 200
-    assert response.json() == {"id": 1, "name": "User", "email": "user@example.com"}
+    assert response.json() == {
+        "data": {"id": 1, "name": "User", "email": "user@example.com"}
+    }
 
 
 @pytest.mark.asyncio
@@ -647,7 +663,7 @@ async def test_me_rejects_missing_or_deleted_user(session: FakeSession) -> None:
 
     response = await request(
         "GET",
-        "/auth/me",
+        f"{settings.api_prefix}/auth/me",
         session=session,
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -664,7 +680,7 @@ async def test_me_rejects_revoked_token() -> None:
 
     response = await request(
         "GET",
-        "/auth/me",
+        f"{settings.api_prefix}/auth/me",
         session=FakeSession([user_factory()]),
         redis=redis,
         headers={"Authorization": f"Bearer {token}"},
@@ -681,7 +697,7 @@ async def test_me_fails_closed_when_redis_unavailable() -> None:
 
     response = await request(
         "GET",
-        "/auth/me",
+        f"{settings.api_prefix}/auth/me",
         session=FakeSession([user_factory()]),
         redis=redis,
         headers={"Authorization": f"Bearer {token}"},
@@ -698,7 +714,7 @@ async def test_logout_revokes_token_until_expiry() -> None:
 
     response = await request(
         "POST",
-        "/auth/logout",
+        f"{settings.api_prefix}/auth/logout",
         redis=redis,
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -719,7 +735,7 @@ async def test_logout_revokes_refresh_token_cookie_and_clears_cookie() -> None:
 
     response = await request(
         "POST",
-        "/auth/logout",
+        f"{settings.api_prefix}/auth/logout",
         redis=redis,
         headers={"Authorization": f"Bearer {access_token}"},
         cookies={"refresh_token": refresh_token},
@@ -731,7 +747,7 @@ async def test_logout_revokes_refresh_token_cookie_and_clears_cookie() -> None:
     set_cookie = response.headers["Set-Cookie"]
     assert "refresh_token=" in set_cookie
     assert "Max-Age=0" in set_cookie
-    assert "Path=/auth" in set_cookie
+    assert f"Path={settings.api_prefix}/auth" in set_cookie
 
 
 @pytest.mark.asyncio
@@ -742,7 +758,7 @@ async def test_logout_fails_closed_when_redis_unavailable() -> None:
 
     response = await request(
         "POST",
-        "/auth/logout",
+        f"{settings.api_prefix}/auth/logout",
         redis=redis,
         headers={"Authorization": f"Bearer {access_token}"},
     )
@@ -752,10 +768,12 @@ async def test_logout_fails_closed_when_redis_unavailable() -> None:
 
 @pytest.mark.asyncio
 async def test_protected_routes_require_token() -> None:
-    root_response = await request("GET", "/")
-    agent_response = await request("POST", "/agent/ask", json={"question": "hello"})
+    agent_response = await request(
+        "POST",
+        f"{settings.api_prefix}/agent/ask",
+        json={"question": "hello"},
+    )
 
-    assert root_response.status_code == 401
     assert agent_response.status_code == 401
 
 
@@ -766,7 +784,8 @@ async def test_protected_routes_accept_valid_token(
     async def fake_current_user() -> UserModel:
         return user_factory()
 
-    async def fake_run_agent(question: str) -> str:
+    async def fake_run_agent(question: str, user_id: int) -> str:
+        assert user_id == 1
         return f"answer: {question}"
 
     app.dependency_overrides[get_current_user] = fake_current_user
@@ -776,14 +795,12 @@ async def test_protected_routes_accept_valid_token(
             transport=ASGITransport(app=app),
             base_url="http://test",
         ) as client:
-            root_response = await client.get("/")
             agent_response = await client.post(
-                "/agent/ask",
+                f"{settings.api_prefix}/agent/ask",
                 json={"question": "hello"},
             )
     finally:
         app.dependency_overrides.clear()
 
-    assert root_response.status_code == 200
     assert agent_response.status_code == 200
-    assert agent_response.json() == {"answer": "answer: hello"}
+    assert agent_response.json() == {"data": {"answer": "answer: hello"}}

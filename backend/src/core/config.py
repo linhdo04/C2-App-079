@@ -13,6 +13,16 @@ class Settings(BaseSettings):
 
     gemini_api_key: str = Field(alias="GEMINI_API_KEY")
     tavily_api_key: str = Field(alias="TAVILY_API_KEY")
+    agent_tool_timeout_seconds: float = Field(
+        alias="AGENT_TOOL_TIMEOUT_SECONDS",
+        default=15.0,
+        gt=0,
+    )
+    agent_llm_timeout_seconds: float = Field(
+        alias="AGENT_LLM_TIMEOUT_SECONDS",
+        default=20.0,
+        gt=0,
+    )
 
     app_name: str = Field(alias="APP_NAME")
     app_env: Literal["development", "production", "testing"] = Field(
@@ -20,7 +30,7 @@ class Settings(BaseSettings):
     )
     app_debug: bool = Field(alias="APP_DEBUG", default=False)
     frontend_origin: str = Field(
-        alias="FRONTEND_ORIGIN", default="http://localhost:3030"
+        alias="FRONTEND_ORIGIN", default="http://localhost:3000"
     )
 
     api_host: str = Field(alias="API_HOST")
@@ -63,6 +73,14 @@ class Settings(BaseSettings):
     @property
     def redis_url(self) -> str:
         return f"redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}"
+
+    @property
+    def frontend_origins(self) -> list[str]:
+        return [
+            origin.strip().rstrip("/")
+            for origin in self.frontend_origin.split(",")
+            if origin.strip()
+        ]
 
 
 settings = Settings()  # type: ignore[call-arg]
