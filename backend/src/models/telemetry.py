@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, CheckConstraint, Column, DateTime, Index
+from sqlalchemy import JSON, CheckConstraint, Column, DateTime, Index, text
 from sqlmodel import Field
 
 from .base import BaseModel, get_utc_now
@@ -34,6 +34,15 @@ class TelemetryModel(BaseModel, table=True):
             name="ck_telemetry_humidity_percent",
         ),
         Index("ix_telemetry_iot_node_id_timestamp", "iot_node_id", "timestamp"),
+        Index(
+            "ix_telemetry_active_environment_timestamp_node",
+            "timestamp",
+            "iot_node_id",
+            postgresql_where=text(
+                "deleted_at IS NULL AND "
+                "(temperature_celsius IS NOT NULL OR humidity_percent IS NOT NULL)"
+            ),
+        ),
     )
 
     iot_node_id: int = Field(
