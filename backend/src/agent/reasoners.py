@@ -1,7 +1,7 @@
 """Reasoner implementations for the ReAct loop."""
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import Callable, Sequence
 from typing import Any, cast
 
 import structlog
@@ -101,35 +101,6 @@ class GeminiReasoner:
         self._log_usage(response)
         return str(getattr(response, "content", response))
 
-    async def stream_finalize(
-        self,
-        goal: str,
-        memory: Memory,
-        run_id: str,
-    ) -> AsyncIterator[str]:
-        history = "\n".join(step.model_dump_json() for step in memory.steps())
-        conversation = "\n".join(
-            f"{message.role}: {message.content}" for message in memory.conversation()
-        )
-        async with asyncio.timeout(self._timeout_seconds):
-            async for chunk in self._llm.astream(
-                [
-                    SystemMessage(content=SYSTEM_PROMPT),
-                    HumanMessage(
-                        content=(
-                            f"Recent conversation:\n{conversation}\n\n"
-                            f"User goal:\n{goal}\n\n"
-                            f"ReAct steps:\n{history}\n\n"
-                            "Provide the final answer for the user."
-                        )
-                    ),
-                ]
-            ):
-                content = str(getattr(chunk, "content", "") or "")
-                if content:
-                    yield content
-                self._log_usage(chunk, run_id=run_id)
-
     @staticmethod
     def _log_usage(response: Any, *, run_id: str = "") -> None:
         usage = getattr(response, "usage_metadata", None)
@@ -174,14 +145,6 @@ class HeuristicReasoner:
 
     async def finalize(self, goal: str, memory: Memory) -> str:
         return self._answer(goal, memory)
-
-    async def stream_finalize(
-        self,
-        goal: str,
-        memory: Memory,
-        run_id: str,
-    ) -> AsyncIterator[str]:
-        yield await self.finalize(goal, memory)
 
     @staticmethod
     def _tool_input(tool_name: str, goal: str) -> dict[str, Any]:
@@ -242,31 +205,6 @@ class FallbackReasoner:
                 error_type=type(exc).__name__,
             )
             return await self._fallback.finalize(goal, memory)
-
-    async def stream_finalize(
-        self,
-        goal: str,
-        memory: Memory,
-        run_id: str,
-    ) -> AsyncIterator[str]:
-        emitted = False
-        try:
-            primary = cast(Any, self._primary)
-            async for token in primary.stream_finalize(goal, memory, run_id):
-                emitted = True
-                yield token
-        except Exception as exc:
-            logger.warning(
-                "agent_provider_fallback",
-                operation="stream_finalize",
-                provider="gemini",
-                error_type=type(exc).__name__,
-            )
-            if emitted:
-                raise
-            fallback = cast(Any, self._fallback)
-            async for token in fallback.stream_finalize(goal, memory, run_id):
-                yield token
 
 
 __all__ = [

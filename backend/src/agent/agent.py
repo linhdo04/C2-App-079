@@ -2,12 +2,13 @@
 
 import asyncio
 from collections.abc import AsyncIterator, Sequence
-from typing import Any, Literal, TypedDict, cast
+from contextlib import suppress
+from typing import Literal, TypedDict
 
 from core import settings
 
 from .factory import create_default_agent
-from .react import AgentEvent, ConversationMessage, InMemoryMemory
+from .react import AgentEvent, AgentLoopResult, ConversationMessage, InMemoryMemory
 
 default_agent = create_default_agent()
 
@@ -59,7 +60,7 @@ async def stream_agent(
     *,
     history: Sequence[ConversationMessage] | None = None,
 ) -> AsyncIterator[AgentStreamEvent]:
-    queue: asyncio.Queue[AgentStreamEvent] = asyncio.Queue()
+    queue: asyncio.Queue[AgentStreamEvent | None] = asyncio.Queue()
     memory = _memory(history)
 
     async def on_event(event: AgentEvent) -> None:
@@ -76,43 +77,41 @@ async def stream_agent(
             }
         )
 
-    yield {
-        "event": "status",
-        "phase": "routing",
-        "message": "Đang phân tích yêu cầu...",
-    }
-    task = asyncio.create_task(
-        default_agent.run(
-            question,
-            user_id=user_id,
-            memory=memory,
-            on_event=on_event,
-        )
-    )
-    while not task.done() or not queue.empty():
+    async def run_with_completion_signal() -> AgentLoopResult:
         try:
-            yield await asyncio.wait_for(queue.get(), timeout=0.05)
-        except TimeoutError:
-            continue
-    result = await task
+            return await default_agent.run(
+                question,
+                user_id=user_id,
+                memory=memory,
+                on_event=on_event,
+            )
+        finally:
+            await queue.put(None)
+
+    task = asyncio.create_task(run_with_completion_signal())
+    try:
+        yield {
+            "event": "status",
+            "phase": "routing",
+            "message": "Đang phân tích yêu cầu...",
+        }
+        while True:
+            event = await queue.get()
+            if event is None:
+                break
+            yield event
+        result = await task
+    finally:
+        if not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
     yield {
         "event": "status",
         "phase": "synthesis",
         "message": "Đang tổng hợp câu trả lời...",
     }
-    loop = getattr(default_agent, "loop", None)
-    reasoner = getattr(loop, "reasoner", None)
-    stream_finalizer = getattr(reasoner, "stream_finalize", None)
-    if callable(stream_finalizer):
-        async for token in cast(Any, stream_finalizer)(
-            question,
-            memory,
-            result.run_id,
-        ):
-            yield {"event": "token", "content": token}
-        return
-
-    # Fake reasoners can omit streaming while preserving the same SSE envelope.
     for start in range(0, len(result.final_response), 32):
         yield {
             "event": "token",
