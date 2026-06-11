@@ -76,7 +76,10 @@ async def list_environment_telemetry(
                 cast(Any, TelemetryModel.humidity_percent).is_not(None),
             ),
         )
-        .order_by(cast(Any, TelemetryModel.timestamp).desc())
+        .order_by(
+            cast(Any, TelemetryModel.timestamp).desc(),
+            cast(Any, TelemetryModel.id).desc(),
+        )
         .limit(limit)
     )
     result = await session.execute(statement)

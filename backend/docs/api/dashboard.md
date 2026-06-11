@@ -16,7 +16,8 @@ Endpoint yêu cầu access token hợp lệ.
 ### Response
 
 Response dùng envelope `data` và `meta`. Các mẫu trong `data` được sắp xếp theo
-thời gian tăng dần để hiển thị trực tiếp trên biểu đồ.
+thời gian tăng dần để hiển thị trực tiếp trên biểu đồ. Khi nhiều mẫu có cùng
+timestamp, `id` được dùng làm tie-breaker để thứ tự luôn xác định.
 
 ```json
 {

@@ -40,12 +40,21 @@ def user_factory(user_id: int | None = 7) -> UserModel:
 async def test_list_environment_telemetry_returns_chronological_user_data() -> None:
     now = datetime.now(UTC)
     latest = TelemetryModel(
+        id=3,
         iot_node_id=3,
         timestamp=now,
         temperature_celsius=29.4,
         humidity_percent=68.0,
     )
+    same_timestamp = TelemetryModel(
+        id=2,
+        iot_node_id=3,
+        timestamp=now,
+        temperature_celsius=28.8,
+        humidity_percent=70.0,
+    )
     earlier = TelemetryModel(
+        id=1,
         iot_node_id=3,
         timestamp=now - timedelta(hours=1),
         temperature_celsius=27.1,
@@ -54,6 +63,7 @@ async def test_list_environment_telemetry_returns_chronological_user_data() -> N
     session = FakeSession(
         [
             (latest, "Cảm biến 03", "Ruộng lúa"),
+            (same_timestamp, "Cảm biến 03", "Ruộng lúa"),
             (earlier, "Cảm biến 03", "Ruộng lúa"),
         ]
     )
@@ -66,17 +76,24 @@ async def test_list_environment_telemetry_returns_chronological_user_data() -> N
 
     assert [reading.timestamp for reading in response.data] == [
         earlier.timestamp,
+        same_timestamp.timestamp,
         latest.timestamp,
+    ]
+    assert [reading.temperature_celsius for reading in response.data] == [
+        27.1,
+        28.8,
+        29.4,
     ]
     assert response.data[-1].temperature_celsius == 29.4
     assert response.data[-1].humidity_percent == 68.0
     assert response.data[-1].node_name == "Cảm biến 03"
-    assert response.meta.count == 2
+    assert response.meta.count == 3
     assert response.meta.limit == 24
     assert response.meta.latest_timestamp == latest.timestamp
     statement = str(session.statements[0])
     assert "missions.owner_id" in statement
     assert "telemetry.temperature_celsius IS NOT NULL" in statement
+    assert "telemetry.timestamp DESC, telemetry.id DESC" in statement
     assert session.statements[0]._limit_clause.value == 24
 
 
