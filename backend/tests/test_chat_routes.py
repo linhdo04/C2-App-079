@@ -13,6 +13,7 @@ from api.routes.agent_routes import (
     _decode_chat_cursor,
     _encode_chat_cursor,
     _get_active_chat,
+    _load_agent_history,
     _title_from_question,
     create_chat,
     create_chat_message,
@@ -20,7 +21,7 @@ from api.routes.agent_routes import (
     list_chats,
     stream_chat_message,
 )
-from models.chat_history import ChatRole
+from models.chat_history import ChatHistoryModel, ChatRole
 from models.chat_session import ChatSessionModel
 from models.user import UserModel
 
@@ -136,6 +137,39 @@ async def test_get_active_chat_rejects_missing_or_unowned_chat() -> None:
         await _get_active_chat(session, 99, 7)  # type: ignore[arg-type]
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_load_agent_history_filters_owner_and_orders_messages() -> None:
+    older = ChatHistoryModel(
+        user_id=7,
+        chat_session_id=10,
+        role=ChatRole.USER,
+        message="older",
+        timestamp=datetime(2026, 6, 10, tzinfo=UTC),
+    )
+    newer = ChatHistoryModel(
+        user_id=7,
+        chat_session_id=10,
+        role=ChatRole.ASSISTANT,
+        message="newer",
+        timestamp=datetime(2026, 6, 11, tzinfo=UTC),
+    )
+    session = FakeSession([[newer, older]])
+
+    history = await _load_agent_history(
+        session,  # type: ignore[arg-type]
+        10,
+        7,
+    )
+
+    assert [message.content for message in history] == ["older", "newer"]
+    statement = session.statements[0]
+    statement_text = str(statement)
+    assert "chat_histories.user_id" in statement_text
+    assert "chat_histories.chat_session_id" in statement_text
+    assert "chat_histories.timestamp DESC" in statement_text
+    assert statement._limit_clause.value > 0
 
 
 @pytest.mark.asyncio
@@ -286,7 +320,11 @@ async def test_list_chats_rejects_invalid_or_mismatched_cursor() -> None:
         )
     assert mismatch_exc.value.status_code == 400
 
-    tampered_cursor = f"{cursor[:-1]}{'A' if cursor[-1] != 'A' else 'B'}"
+    encoded_payload, encoded_signature = cursor.split(".", maxsplit=1)
+    tampered_signature = (
+        f"{'A' if encoded_signature[0] != 'A' else 'B'}{encoded_signature[1:]}"
+    )
+    tampered_cursor = f"{encoded_payload}.{tampered_signature}"
     with pytest.raises(HTTPException) as tampered_exc:
         await list_chats(
             user_factory(),
@@ -309,11 +347,17 @@ async def test_create_chat_message_saves_question_and_answer(
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )
-    session = FakeSession([chat, chat])
+    session = FakeSession([chat, [], chat])
 
-    async def fake_run_agent(question: str, user_id: int) -> str:
+    async def fake_run_agent(
+        question: str,
+        user_id: int,
+        *,
+        history: list[Any],
+    ) -> str:
         assert question == "Phân tích nhiệt độ và độ ẩm"
         assert user_id == 7
+        assert history == []
         return "Nhiệt độ trung bình 30°C, độ ẩm trung bình 70%."
 
     monkeypatch.setattr("api.routes.agent_routes.run_agent", fake_run_agent)
@@ -334,8 +378,8 @@ async def test_create_chat_message_saves_question_and_answer(
         response.assistant_message.message
         == "Nhiệt độ trung bình 30°C, độ ẩm trung bình 70%."
     )
-    assert "FOR UPDATE" in str(session.statements[1])
-    assert session.statements[1].get_execution_options()["populate_existing"] is True
+    assert "FOR UPDATE" in str(session.statements[2])
+    assert session.statements[2].get_execution_options()["populate_existing"] is True
 
 
 @pytest.mark.asyncio
@@ -368,11 +412,17 @@ async def test_stream_chat_message_emits_tokens_and_persists_done_event(
 ) -> None:
     chat = ChatSessionModel(id=10, user_id=7, title="Cuộc trò chuyện mới")
     current_user = ExpiringUser(7)
-    session = ExpiringSession(current_user, [chat, chat])
+    session = ExpiringSession(current_user, [chat, [], chat])
 
-    async def fake_stream_agent(question: str, user_id: int) -> Any:
+    async def fake_stream_agent(
+        question: str,
+        user_id: int,
+        *,
+        history: list[Any],
+    ) -> Any:
         assert question == "Tư vấn lúa"
         assert user_id == 7
+        assert history == []
         yield {
             "event": "status",
             "phase": "routing",
@@ -409,8 +459,8 @@ async def test_stream_chat_message_emits_tokens_and_persists_done_event(
     assert '"message": "Xin chào"' in body
     assert session.rollback_count == 1
     assert session.committed is True
-    assert "FOR UPDATE" in str(session.statements[1])
-    assert session.statements[1].get_execution_options()["populate_existing"] is True
+    assert "FOR UPDATE" in str(session.statements[2])
+    assert session.statements[2].get_execution_options()["populate_existing"] is True
 
 
 @pytest.mark.asyncio
@@ -420,7 +470,12 @@ async def test_stream_chat_message_rolls_back_and_emits_error(
     chat = ChatSessionModel(id=10, user_id=7, title="Cuộc trò chuyện mới")
     session = FakeSession([chat])
 
-    async def failing_stream_agent(question: str, user_id: int) -> Any:
+    async def failing_stream_agent(
+        question: str,
+        user_id: int,
+        *,
+        history: list[Any],
+    ) -> Any:
         if False:
             yield ""
         raise RuntimeError("stream unavailable")
@@ -441,8 +496,8 @@ async def test_stream_chat_message_rolls_back_and_emits_error(
 
     assert "event: error" in body
     assert '"error": "stream_error"' in body
-    assert '"message": "stream unavailable"' in body
-    assert "stream unavailable" in body
+    assert '"message": "Không thể hoàn tất phản hồi lúc này."' in body
+    assert "stream unavailable" not in body
     assert session.rollback_count == 2
     assert session.added == []
 

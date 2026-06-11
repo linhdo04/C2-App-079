@@ -147,5 +147,5 @@ Soft-delete chat và trả `204 No Content`.
 - `422 Unprocessable Entity`: request không hợp lệ.
 - `500 Internal Server Error`: agent không thể tạo câu trả lời.
 
-Graph hiện vẫn xử lý riêng câu hỏi mới nhất. Lịch sử chat được lưu và hiển thị
-nhưng chưa được đưa vào context của LLM.
+Chat message endpoints đưa recent history thuộc chính user/chat vào context của
+agent. `/agent/ask` vẫn stateless.
