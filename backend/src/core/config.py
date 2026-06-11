@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     )
 
     gemini_api_key: str = Field(alias="GEMINI_API_KEY")
+    model: str = Field(alias="MODEL")
     tavily_api_key: str = Field(alias="TAVILY_API_KEY")
     agent_tool_timeout_seconds: float = Field(
         alias="AGENT_TOOL_TIMEOUT_SECONDS",
@@ -23,6 +24,32 @@ class Settings(BaseSettings):
         default=20.0,
         gt=0,
     )
+    agent_max_iterations: int = Field(
+        alias="AGENT_MAX_ITERATIONS",
+        default=6,
+        gt=0,
+    )
+    agent_tool_max_retries: int = Field(
+        alias="AGENT_TOOL_MAX_RETRIES",
+        default=1,
+        ge=0,
+    )
+    agent_tool_retry_backoff_seconds: float = Field(
+        alias="AGENT_TOOL_RETRY_BACKOFF_SECONDS",
+        default=0.25,
+        ge=0,
+    )
+    agent_memory_max_messages: int = Field(
+        alias="AGENT_MEMORY_MAX_MESSAGES",
+        default=10,
+        gt=0,
+    )
+    agent_memory_max_characters: int = Field(
+        alias="AGENT_MEMORY_MAX_CHARACTERS",
+        default=12_000,
+        gt=0,
+    )
+    agent_document_roots: str = Field(alias="AGENT_DOCUMENT_ROOTS", default="")
 
     app_name: str = Field(alias="APP_NAME")
     app_env: Literal["development", "production", "testing"] = Field(
@@ -80,6 +107,14 @@ class Settings(BaseSettings):
             origin.strip().rstrip("/")
             for origin in self.frontend_origin.split(",")
             if origin.strip()
+        ]
+
+    @property
+    def agent_document_root_list(self) -> list[str]:
+        return [
+            root.strip()
+            for root in self.agent_document_roots.split(",")
+            if root.strip()
         ]
 
 

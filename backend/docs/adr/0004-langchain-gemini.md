@@ -1,4 +1,4 @@
-Title: Use LangChain agent with Google Generative AI (Gemini)
+Title: Use a provider-neutral ReAct loop with Gemini
 Date: 2026-06-07
 Status: Accepted
 
@@ -8,12 +8,16 @@ Service needs an LLM-driven agent for natural-language queries and tool orchestr
 
 Decision
 
-Use `langchain` agent patterns and the Google Generative AI (Gemini) model via the `langchain_google_genai` integration.
+Use the application's explicit ReAct loop and provider-neutral `Reasoner`
+interface. Gemini remains the production provider through
+`langchain_google_genai`; LangGraph is not part of the runtime.
 
 Consequences
 
-- Pros: established agent abstractions, easy tool integration, Gemini provides high-quality generative responses.
-- Cons: dependency on external API keys and quotas; must design safe tool usage and error handling.
+- Pros: explicit termination, retry, schema validation, streaming, and testable
+  provider/tool boundaries.
+- Cons: the application owns orchestration behavior and remains dependent on
+  Gemini API keys and quotas.
 
 Alternatives considered
 

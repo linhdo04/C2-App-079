@@ -13,8 +13,8 @@ from sqlalchemy import ColumnElement, and_, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
-from agent.agent import graph as _graph
 from agent.agent import run_agent, stream_agent
+from agent.react import ConversationMessage
 from api.dependencies import get_current_user
 from api.responses import CollectionMeta, CollectionResponse, DataResponse
 from core import settings
@@ -23,11 +23,6 @@ from models.base import get_utc_now
 from models.chat_history import ChatHistoryModel, ChatRole
 from models.chat_session import ChatSessionModel
 from models.user import UserModel
-
-# `graph` is a runtime object from the agent library; mypy's static type
-# inference does not expose the `run` method. Cast to `Any` to silence type
-# checker while preserving runtime behavior.
-graph: Any = cast(Any, _graph)
 
 router = APIRouter()
 
@@ -250,6 +245,40 @@ async def _persist_chat_exchange(
     )
 
 
+async def _load_agent_history(
+    session: AsyncSession,
+    chat_id: int,
+    user_id: int,
+) -> list[ConversationMessage]:
+    result = await session.execute(
+        select(ChatHistoryModel)
+        .where(
+            cast(
+                ColumnElement[bool],
+                ChatHistoryModel.chat_session_id == chat_id,
+            ),
+            cast(ColumnElement[bool], ChatHistoryModel.user_id == user_id),
+            cast(
+                ColumnElement[bool],
+                cast(Any, ChatHistoryModel.deleted_at).is_(None),
+            ),
+            cast(
+                ColumnElement[bool],
+                cast(Any, ChatHistoryModel.role).in_(
+                    [ChatRole.USER, ChatRole.ASSISTANT, ChatRole.SYSTEM]
+                ),
+            ),
+        )
+        .order_by(cast(Any, ChatHistoryModel.timestamp).desc())
+        .limit(settings.agent_memory_max_messages)
+    )
+    messages = list(reversed(result.scalars().all()))
+    return [
+        ConversationMessage(role=cast(Any, message.role.value), content=message.message)
+        for message in messages
+    ]
+
+
 def _sse_event(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -459,9 +488,14 @@ async def create_chat_message(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
     await _get_active_chat(session, chat_id, current_user.id)
+    history = await _load_agent_history(session, chat_id, current_user.id)
     question = req.question.strip()
     try:
-        answer = await run_agent(question, current_user.id)
+        answer = await run_agent(
+            question,
+            current_user.id,
+            history=history,
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -488,6 +522,7 @@ async def stream_chat_message(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
     await _get_active_chat(session, chat_id, user_id)
+    history = await _load_agent_history(session, chat_id, user_id)
     # Release the read-only transaction before the potentially long LLM stream.
     # Persistence revalidates ownership and locks the latest chat row.
     await session.rollback()
@@ -496,7 +531,11 @@ async def stream_chat_message(
     async def event_stream() -> AsyncIterator[str]:
         answer_parts: list[str] = []
         try:
-            async for event in stream_agent(question, user_id):
+            async for event in stream_agent(
+                question,
+                user_id,
+                history=history,
+            ):
                 event_name = event["event"]
                 if event_name == "token":
                     content = event.get("content", "")
@@ -530,13 +569,13 @@ async def stream_chat_message(
                 "done",
                 {"data": result.model_dump(mode="json")},
             )
-        except Exception as exc:
+        except Exception:
             await session.rollback()
             yield _sse_event(
                 "error",
                 {
                     "error": "stream_error",
-                    "message": str(exc),
+                    "message": "Không thể hoàn tất phản hồi lúc này.",
                 },
             )
 
