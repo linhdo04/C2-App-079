@@ -1,3 +1,5 @@
+import base64
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -228,6 +230,29 @@ async def test_list_chats_applies_cursor_tie_breaker() -> None:
     assert "chat_sessions.updated_at <" in statement_text
     assert "chat_sessions.updated_at =" in statement_text
     assert "chat_sessions.id <" in statement_text
+
+
+def test_chat_cursor_does_not_expose_search_text() -> None:
+    now = datetime.now(UTC)
+    sensitive_search = "confidential crop failure"
+    cursor = _encode_chat_cursor(
+        ChatSessionPublic(
+            id=8,
+            title="Cursor",
+            created_at=now,
+            updated_at=now,
+        ),
+        sensitive_search,
+    )
+
+    encoded_payload = cursor.split(".", maxsplit=1)[0]
+    padding = "=" * (-len(encoded_payload) % 4)
+    payload = json.loads(base64.urlsafe_b64decode(encoded_payload + padding))
+
+    assert payload["version"] == 2
+    assert payload["search_digest"] != sensitive_search
+    assert sensitive_search not in json.dumps(payload)
+    assert _decode_chat_cursor(cursor, sensitive_search).chat_id == 8
 
 
 @pytest.mark.asyncio

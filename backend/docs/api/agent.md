@@ -68,8 +68,9 @@ Query parameters:
 ```
 
 Client không được giải mã, chỉnh sửa hoặc tự tạo cursor. Cursor được backend ký
-để phát hiện thay đổi. Khi `has_more=true`, gửi nguyên `next_cursor` vào request
-tiếp theo cùng giá trị `search`. Cursor không hợp lệ hoặc không khớp search trả
+để phát hiện thay đổi và chỉ lưu digest của search context, không chứa search
+text dạng rõ. Khi `has_more=true`, gửi nguyên `next_cursor` vào request tiếp
+theo cùng giá trị `search`. Cursor không hợp lệ hoặc không khớp search trả
 `400 bad_request`.
 
 Pagination dùng keyset `(updated_at DESC, id DESC)`, tránh chi phí và sai lệch

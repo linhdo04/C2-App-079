@@ -86,16 +86,24 @@ class ChatCursor(BaseModel):
     version: int
     updated_at: datetime
     chat_id: int
-    search: str
+    search_digest: str
+
+
+def _chat_search_digest(search: str) -> str:
+    return hmac.new(
+        settings.jwt_secret_key.encode(),
+        f"chat-cursor-search:{search}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def _encode_chat_cursor(chat: ChatSessionPublic, search: str) -> str:
     payload = (
         ChatCursor(
-            version=1,
+            version=2,
             updated_at=chat.updated_at,
             chat_id=chat.id,
-            search=search,
+            search_digest=_chat_search_digest(search),
         )
         .model_dump_json()
         .encode()
@@ -139,7 +147,11 @@ def _decode_chat_cursor(cursor: str, search: str) -> ChatCursor:
             detail="Invalid pagination cursor",
         ) from exc
 
-    if decoded.version != 1 or decoded.chat_id <= 0 or decoded.search != search:
+    valid_search = hmac.compare_digest(
+        decoded.search_digest,
+        _chat_search_digest(search),
+    )
+    if decoded.version != 2 or decoded.chat_id <= 0 or not valid_search:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid pagination cursor",
