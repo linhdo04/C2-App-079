@@ -5,8 +5,7 @@
 Thư mục làm việc: C2-App-079/
 
 
-── PHASE 1: TRAINING ────────────────────────────────
-cd C2-App-079
+── PHASE 1: TRAINING ──────────────────────────cd "Kiên Trung/Segmentation models training codes"
 
 # Train từ đầu (30 epochs, batch 8)
 python train.py
@@ -17,28 +16,67 @@ python train.py --epochs 50 --batch_size 4 --lr 0.0001
 # Resume từ checkpoint
 python train.py --resume checkpoints/latest.pth
 
-Checkpoint tốt nhất → checkpoints/best_model.pth
-Log training      → logs/run_<timestamp>.json
+Model        : U-Net + ResNet34 (encoder pretrained ImageNet)
+Checkpoint tốt nhất → checkpoints/best_model.pth   (epoch 22, val mIoU 0.8233)
+Checkpoint mới nhất → checkpoints/latest.pth
+Log training  → logs/run_<timestamp>.json
 
 
 ── PHASE 2: INFERENCE + PATH PLANNING ───────────────
-cd C2-App-079
+cd "Kiên Trung/Path planning codes"
 
 # Segment một tile (256x256)
-python inference.py --image "data/processed/images/M-33-20-D-c-4-2_0000.jpg"
+python inference.py --image "../../data/processed/images/M-33-20-D-c-4-2_0000.jpg" \
+  --checkpoint "../Segmentation models training codes/checkpoints/best_model.pth"
 
-# Segment + vẽ flight path luôn
-python inference.py --image "data/processed/images/M-33-20-D-c-4-2_0000.jpg" --plan
+# Segment + vẽ flight path (RCPP, mặc định)
+python inference.py --image "...jpg" --plan \
+  --checkpoint ".../checkpoints/best_model.pth"
 
-# Batch cả folder
-python inference.py --image_dir data/processed/images/ --plan --out_dir results/
+# Chạy BECD (chia nhỏ field thành cells, có A* tránh vật cản)
+python inference.py --image "...jpg" --plan --planner becd \
+  --checkpoint ".../checkpoints/best_model.pth"
 
-Output trong results/:
-  *_mask.png       — mask class IDs (grayscale)
-  *_seg.png        — mask tô màu
-  *_stats.json     — % diện tích từng class
-  *_path.png       — flight path overlay
-  *_waypoints.json — list waypoints {x, y, sweep_idx, is_transit}
+# Chạy cả hai planner để so sánh
+python inference.py --image "...jpg" --plan --planner both \
+  --checkpoint ".../checkpoints/best_model.pth"
+
+# Batch cả folder (ảnh full-size, không phải tile)
+python inference.py --image_dir "../../data/raw/images/" --plan --planner both \
+  --out_dir results/ --checkpoint ".../checkpoints/best_model.pth"
+
+Output trong results/ (suffix _rcpp / _becd nếu chạy --planner both):
+  *_mask.png          — mask class IDs (grayscale)
+  *_seg.png           — mask tô màu
+  *_roi.png           — ROI map: farmland (trắng) = vùng cần bay
+  *_obstacles.png     — obstacle map: vật cản cứng đã giãn nở theo --safety
+  *_stats.json        — % diện tích từng class
+  *_path.png          — flight path overlay (cyan = sweep, cam = transit)
+  *_waypoints.json    — danh sách waypoint đã enrich (xem schema bên dưới)
+  *_mission.json      — metadata chuyến bay (xem schema bên dưới)
+
+
+── WAYPOINTS JSON SCHEMA ─────────────────────────────
+Mỗi waypoint:
+{
+  "x":                  float,  // toạ độ pixel cột
+  "y":                  float,  // toạ độ pixel hàng
+  "sweep_idx":          int,    // index của sweep line / cell
+  "is_transit":         bool,   // true = di chuyển tái định vị, false = đang quét
+  "heading":            float,  // hướng bay tới điểm này, độ (0-360, 0 = +x)
+  "dist_from_prev_px":  float,  // khoảng cách tới điểm trước (px)
+  "cumulative_dist_px": float   // tổng khoảng cách lũy kế từ điểm đầu (px)
+}
+
+
+── MISSION JSON SCHEMA ───────────────────────────────
+{
+  "image":           {"width": int, "height": int},
+  "planner":         "rcpp" | "becd",
+  "total_waypoints": int,
+  "total_dist_px":   float,
+  "coverage":        { ...giống *_stats.json... }
+}
 
 
 ── TUỲ CHỈNH PATH PLANNER ───────────────────────────
@@ -46,6 +84,36 @@ python inference.py --image ... --plan \
   --swath   40   # footprint camera (px)  \
   --overlap 0.2  # overlap giữa các sweep  \
   --safety  10   # khoảng cách an toàn với vật cản (px)
+
+
+── A* OBSTACLE AVOIDANCE (RCPP & BECD) ───────────────
+Cả 2 planner đều dùng chung logic stitch transit:
+  1. Thử đường thẳng trực tiếp — nếu không cắt vật cản (_line_free) thì dùng luôn.
+  2. Nếu đường thẳng bị chặn → chạy A* trên grid downsample (max-pool, step=8,
+     tối đa 50,000 lần mở rộng node) để tìm đường vòng quanh vật cản.
+  3. Nếu A* không tìm được đường (vượt giới hạn / không tới được) → fallback
+     về đường thẳng (đã đánh dấu is_transit=True để dễ nhận biết trong sim).
+
+BECD: nối các cell (sau khi chia field theo topology split/merge, quét
+boustrophedon dọc trong từng cell, sắp xếp cell theo thứ tự gần nhất - greedy).
+Console in: "[BECD] A* rerouted N / M inter-cell transition(s)."
+
+RCPP: nối các đoạn (segment) bị obstacle chia cắt trên cùng 1 sweep line, và
+nối giữa các sweep line với nhau.
+Console in: "[RCPP] A* rerouted N / M transit(s)."
+
+Các điểm transit (kể cả điểm A* trung gian) đều có is_transit=True và được
+vẽ màu cam trong *_path.png; các điểm coverage vẽ màu cyan.
+
+
+── DÙNG path_planner.py ĐỘC LẬP (không cần model) ────
+cd "Kiên Trung/Path planning codes"
+
+# RCPP từ mask có sẵn
+python path_planner.py --mask mask.png --swath 40 --overlap 0.2 --out path.png
+
+# BECD + xuất waypoints JSON
+python path_planner.py --mask mask.png --planner becd --json waypoints.json
 
 
 ── CLASS IDs ─────────────────────────────────────────
@@ -57,9 +125,14 @@ python inference.py --image ... --plan \
 
 
 ── FILES CHÍNH ───────────────────────────────────────
-  train.py         — training U-Net + ResNet34
-  inference.py     — inference + RCPP path planner
-  path_planner.py  — RCPP (import riêng nếu cần)
-  preprocess.py    — tạo tiles 256x256 từ ảnh gốc
+  Segmentation models training codes/
+    train.py          — training U-Net + ResNet34
+                         checkpoints/ → best_model.pth, latest.pth
+  Path planning codes/
+    inference.py       — inference + RCPP/BECD path planner + JSON export
+    path_planner.py     — RCPP + BECD + A* (import riêng hoặc chạy CLI)
+    preprocess.py       — tạo tiles 256x256 từ ảnh gốc
+    results/            — output mỗi lần chạy inference --plan
+    preprocess.py    — tạo tiles 256x256 từ ảnh gốc
 
 ====================================================

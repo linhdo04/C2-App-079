@@ -85,12 +85,14 @@ class RotatingCalipersPlanner:
         swath_width:   int   = 40,
         overlap:       float = 0.20,
         safety_margin: int   = 10,
+        astar_step:    int   = 8,
     ):
         if not (0.0 <= overlap < 1.0):
             raise ValueError("overlap must be in [0, 1)")
         self.swath_width   = swath_width
         self.step          = max(1, int(swath_width * (1.0 - overlap)))
         self.safety_margin = safety_margin
+        self.astar_step    = astar_step
         self._last_angle   = 0.0   # stored after plan() for diagnostics
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -99,22 +101,68 @@ class RotatingCalipersPlanner:
         """
         Generate boustrophedon coverage waypoints from a segmentation mask.
 
+        Every farmland region above a minimum area is covered (largest first),
+        each with its own optimal sweep angle. Disconnected regions are
+        stitched together with the same _line_free / _astar transit routing
+        used for inter-segment gaps.
+
         Args:
             mask: H×W array of integer class IDs (0–4).
 
         Returns:
             Ordered list of Waypoint objects, or [] if no farmland found.
         """
-        contour = self._largest_farmland_contour(mask)
-        if contour is None:
+        contours = self._farmland_contours(mask)
+        if not contours:
             print("[RCPP] No farmland contour found.")
             return []
 
-        obs_mask         = self._obstacle_mask(mask)
-        angle            = self._sweep_angle(contour)
-        self._last_angle = angle
+        obs_mask = self._obstacle_mask(mask)
 
-        return self._boustrophedon(contour, obs_mask, angle, mask.shape[:2])
+        all_pts:        List[Waypoint] = []
+        sweep_offset    = 0
+        total_astar     = 0
+        total_transits  = 0
+
+        for i, contour in enumerate(contours):
+            angle = self._sweep_angle(contour)
+            if i == 0:
+                self._last_angle = angle
+
+            wps, n_astar, n_transits = self._boustrophedon(
+                contour, obs_mask, angle, mask.shape[:2], sweep_offset)
+            if not wps:
+                continue
+
+            sweep_offset    = wps[-1].sweep_idx + 1
+            total_astar    += n_astar
+            total_transits += n_transits
+
+            if not all_pts:
+                all_pts.extend(wps)
+                continue
+
+            # Stitch this region's first point to the previous region's last point
+            total_transits += 1
+            prev_x, prev_y = all_pts[-1].x, all_pts[-1].y
+            next_x, next_y = wps[0].x, wps[0].y
+
+            if not _line_free((prev_x, prev_y), (next_x, next_y), obs_mask):
+                path = _astar((prev_x, prev_y), (next_x, next_y), obs_mask, step=self.astar_step)
+                if path:
+                    total_astar += 1
+                    for tx, ty in path[1:-1]:
+                        all_pts.append(Waypoint(float(tx), float(ty), wps[0].sweep_idx, True))
+
+            wps[0].is_transit = True
+            all_pts.extend(wps)
+
+        if total_transits:
+            print(f"[RCPP] A* rerouted {total_astar} / {total_transits} transit(s).")
+        if len(contours) > 1:
+            print(f"[RCPP] Covered {len(contours)} farmland region(s).")
+
+        return all_pts
 
     def visualize(
         self,
@@ -147,10 +195,11 @@ class RotatingCalipersPlanner:
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
-    def _largest_farmland_contour(self, mask: np.ndarray):
+    def _farmland_contours(self, mask: np.ndarray) -> List[np.ndarray]:
         """
-        Threshold class 0, apply morphological cleanup, return the largest
-        external contour (= main farmland area).
+        Threshold class 0, apply morphological cleanup, return all external
+        contours (= farmland regions) above a minimum area, largest first.
+        Tiny slivers (smaller than ~2x2 swaths) are dropped as noise.
         """
         binary = (mask == FARMLAND).astype(np.uint8)
         k      = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
@@ -159,7 +208,11 @@ class RotatingCalipersPlanner:
 
         contours, _ = cv2.findContours(
             binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        return max(contours, key=cv2.contourArea) if contours else None
+
+        min_area = (self.swath_width * 2) ** 2
+        contours = [c for c in contours if cv2.contourArea(c) >= min_area]
+        contours.sort(key=cv2.contourArea, reverse=True)
+        return contours
 
     def _obstacle_mask(self, mask: np.ndarray) -> np.ndarray:
         """Binary mask of hard obstacles, dilated by safety_margin pixels."""
@@ -195,13 +248,18 @@ class RotatingCalipersPlanner:
         obs_mask:      np.ndarray,
         angle_deg:     float,
         shape:         Tuple[int, int],
-    ) -> List[Waypoint]:
+        sweep_offset:  int = 0,
+    ) -> Tuple[List[Waypoint], int, int]:
         """
         1. Rotate everything so the field's long axis is horizontal.
         2. Sweep horizontal lines spaced `step` pixels apart.
         3. On each line find traversable segments (farmland AND not obstacle).
         4. Alternate left→right / right→left between lines (boustrophedon).
         5. Rotate waypoints back to the original image frame.
+        6. Stitch every segment/sweep gap with A*-routed transit waypoints
+           (same _line_free / _astar logic as BECDPlanner._cover_cells).
+
+        Returns (waypoints, n_astar_reroutes, n_transits).
         """
         H, W   = shape
         cx, cy = W / 2.0, H / 2.0
@@ -223,7 +281,7 @@ class RotatingCalipersPlanner:
 
         raw: List[Tuple[float, float, int]] = []   # (x, y, sweep_idx)
         left_to_right = True
-        sweep_idx     = 0
+        sweep_idx     = sweep_offset
 
         for y in range(y_min + self.step // 2, y_max, self.step):
             if not (0 <= y < H):
@@ -249,22 +307,47 @@ class RotatingCalipersPlanner:
             sweep_idx    += 1
 
         if not raw:
-            return []
+            return [], 0, 0
 
         # Rotate waypoints back to original frame
         src  = np.array([(x, y) for x, y, _ in raw],
                         dtype=np.float32).reshape(1, -1, 2)
         back = cv2.transform(src, M_inv).reshape(-1, 2)
 
-        wps = [
-            Waypoint(float(back[i, 0]), float(back[i, 1]), raw[i][2])
-            for i in range(len(raw))
-        ]
-        # First point of each new sweep is a transit (repositioning from previous sweep end)
-        for i in range(1, len(wps)):
-            if wps[i].sweep_idx != wps[i - 1].sweep_idx:
-                wps[i].is_transit = True
-        return wps
+        pts = [(float(back[i, 0]), float(back[i, 1]), raw[i][2])
+               for i in range(len(raw))]
+
+        # raw is built as alternating (coverage pair, gap, coverage pair, gap, ...)
+        # i.e. transitions at even i (1->2, 3->4, ...) are gaps between segments
+        # or sweep lines; transitions at odd i (0->1, 2->3, ...) are coverage runs.
+        all_pts: List[Tuple[float, float, int, bool]] = [(*pts[0], False)]
+        n_astar    = 0
+        n_transits = 0
+
+        for i in range(1, len(pts)):
+            x, y, s = pts[i]
+            is_gap  = (i % 2 == 0)
+            if not is_gap:
+                all_pts.append((x, y, s, False))
+                continue
+
+            n_transits += 1
+            prev_x, prev_y = all_pts[-1][0], all_pts[-1][1]
+
+            if _line_free((prev_x, prev_y), (x, y), obs_mask):
+                all_pts.append((x, y, s, True))
+            else:
+                path = _astar((prev_x, prev_y), (x, y), obs_mask, step=self.astar_step)
+                if path:
+                    n_astar += 1
+                    for tx, ty in path[1:]:
+                        all_pts.append((tx, ty, s, True))
+                else:
+                    # A* hit limit — straight-line fallback
+                    all_pts.append((x, y, s, True))
+
+        wps = [Waypoint(x, y, s, t) for x, y, s, t in all_pts]
+        return wps, n_astar, n_transits
 
 
 # ── A* transit routing ────────────────────────────────────────────────────────
