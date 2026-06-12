@@ -74,8 +74,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Install Railway CLI
-        run: bash <(curl -fsSL railway.com/install.sh) -y
+        run: npm install -g @railway/cli
 
       - name: Deploy backend
         working-directory: backend
