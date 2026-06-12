@@ -60,6 +60,7 @@ class Settings(BaseSettings):
 
     redis_host: str = Field(alias="REDIS_HOST", default="localhost")
     redis_port: int = Field(alias="REDIS_PORT", default=6379)
+    redis_user: str | None = Field(alias="REDIS_USER", default=None)
     redis_password: str | None = Field(alias="REDIS_PASSWORD", default=None)
 
     jwt_secret_key: str = Field(alias="JWT_SECRET_KEY")
@@ -84,8 +85,8 @@ class Settings(BaseSettings):
 
     @property
     def redis_url(self) -> str:
-        if self.redis_password:
-            return f"redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}"
+        if self.redis_password and self.redis_user:
+            return f"redis://{self.redis_user}:{self.redis_password}@{self.redis_host}:{self.redis_port}"
         return f"redis://{self.redis_host}:{self.redis_port}"
 
     @property
