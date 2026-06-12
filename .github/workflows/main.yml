@@ -18,22 +18,23 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Create test env
-        working-directory: backend
-        run: |
-          cp .env.example .env
-
       - name: Install uv
         run: pip install uv
 
       - name: Install deps
         run: uv sync --frozen --extra dev
 
-      - name: Lint / Check
-        run: make format && make lint && make check
+      - name: Lint check
+        run: make lint-check
+
+      - name: Format check
+        run: make format-check
+
+      - name: Type check
+        run: make typecheck
 
       - name: Test
-        run: uv run pytest
+        run: make test
 
   frontend:
     runs-on: ubuntu-latest
