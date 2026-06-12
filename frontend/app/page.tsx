@@ -23,7 +23,9 @@ export default function Home() {
             <span className="grid size-9 place-items-center rounded-xl bg-primary text-primary-foreground">
               <Radar className="size-5" />
             </span>
-            <span className="text-lg font-bold tracking-[-0.03em]">AeroField</span>
+            <span className="text-lg font-bold tracking-[-0.03em]">
+              AeroFieldAeroFieldAeroFieldAeroFieldAeroFieldAeroFieldAeroField
+            </span>
           </Link>
           <Nav />
         </header>
