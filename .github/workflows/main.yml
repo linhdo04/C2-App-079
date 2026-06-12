@@ -24,11 +24,14 @@ jobs:
       - name: Install deps
         run: uv sync --frozen --extra dev
 
-      - name: Create env
-        run: cp .env.example .env
+      - name: Lint check
+        run: make lint-check
 
-      - name: Check backend
-        run: make format && make lint && make check
+      - name: Format check
+        run: make format-check
+
+      - name: Type check
+        run: make typecheck
 
   frontend-ci:
     runs-on: ubuntu-latest
