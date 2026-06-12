@@ -22,7 +22,7 @@ jobs:
         run: pip install uv
 
       - name: Install deps
-        run: uv sync --frozen
+        run: uv sync --frozen --extra dev
 
       - name: Lint / Check
         run: make format && make lint && make check
