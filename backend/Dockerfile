@@ -21,6 +21,7 @@ COPY --from=deps /app/.venv /app/.venv
 COPY . .
 
 ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONPATH="/app/src"
 
 RUN adduser --disabled-password --gecos "" appuser
 
