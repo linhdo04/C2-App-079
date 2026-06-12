@@ -363,8 +363,8 @@ Before committing frontend changes:
 
 ```bash
 cd backend
-bun format:fix && bun format:check
-bun lint:check
+pnpm format:fix && pnpm format:check
+pnpm lint:check
 ```
 
 All commands must pass.
@@ -377,9 +377,9 @@ Before committing frontend changes:
 
 ```bash
 cd frontend
-bun run lint:check
-bun run format:fix
-bun run format:check
+pnpm run lint:check
+pnpm run format:fix
+pnpm run format:check
 ```
 
 All commands must pass.

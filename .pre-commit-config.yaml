@@ -10,7 +10,7 @@ repos:
 
       - id: frontend-check
         name: frontend check
-        entry: bash -c "cd frontend && bun lint:check && bun format:check"
+        entry: bash -c "cd frontend && pnpm lint:check && pnpm format:check"
         language: system
         pass_filenames: false
         files: ^frontend/
