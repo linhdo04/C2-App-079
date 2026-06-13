@@ -36,12 +36,13 @@ class Settings(BaseSettings):
     agent_document_roots: str = Field(alias="AGENT_DOCUMENT_ROOTS", default="")
 
     app_name: str = Field(alias="APP_NAME", default="Autonomous Drones")
+    app_domain: str = Field(alias="APP_DOMAIN", default="127.0.0.1")
     app_env: Literal["development", "production", "testing"] = Field(
         alias="APP_ENV", default="production"
     )
     app_debug: bool = Field(alias="APP_DEBUG", default=False)
     frontend_origin: str = Field(
-        alias="FRONTEND_ORIGIN", default="http://localhost:3000"
+        alias="FRONTEND_ORIGIN", default="http://127.0.0.1:3000"
     )
 
     api_host: str = Field(alias="API_HOST", default="0.0.0.0")
@@ -56,9 +57,9 @@ class Settings(BaseSettings):
     postgres_password: str = Field(alias="POSTGRES_PASSWORD", default="postgres")
     postgres_db: str = Field(alias="POSTGRES_DB", default="autonomous_drones")
     postgres_port: int = Field(alias="POSTGRES_PORT", default=5432)
-    postgres_host: str = Field(alias="POSTGRES_HOST", default="localhost")
+    postgres_host: str = Field(alias="POSTGRES_HOST", default="127.0.0.1")
 
-    redis_host: str = Field(alias="REDIS_HOST", default="localhost")
+    redis_host: str = Field(alias="REDIS_HOST", default="127.0.0.1")
     redis_port: int = Field(alias="REDIS_PORT", default=6379)
     redis_user: str | None = Field(alias="REDIS_USER", default=None)
     redis_password: str | None = Field(alias="REDIS_PASSWORD", default=None)
@@ -85,8 +86,10 @@ class Settings(BaseSettings):
 
     @property
     def redis_url(self) -> str:
-        if self.redis_password and self.redis_user:
-            return f"redis://{self.redis_user}:{self.redis_password}@{self.redis_host}:{self.redis_port}"
+        if self.redis_password:
+            if self.redis_user:
+                return f"redis://{self.redis_user}:{self.redis_password}@{self.redis_host}:{self.redis_port}"
+            return f"redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}"
         return f"redis://{self.redis_host}:{self.redis_port}"
 
     @property
