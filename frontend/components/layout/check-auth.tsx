@@ -7,6 +7,7 @@ import { useAuthStore } from "@/lib/auth-store";
 import { useQueryClient } from "@tanstack/react-query";
 import { usePathname, useRouter } from "next/navigation";
 import { ReactNode, useEffect } from "react";
+import Loading from "./loading";
 
 export default function CheckAuth({ children }: { children: ReactNode }) {
   const { authStatus, setAuthenticated, setBooting, setUser, clearAuth } = useAuthStore();
@@ -51,6 +52,10 @@ export default function CheckAuth({ children }: { children: ReactNode }) {
       window.clearTimeout(timeoutId);
     };
   }, [clearAuth, currentUserQuery.error, isAuthenticated, queryClient, setBooting]);
+
+  if (currentUserQuery.isFetching) {
+    return <Loading />;
+  }
 
   return <>{children}</>;
 }
