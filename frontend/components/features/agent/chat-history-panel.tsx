@@ -4,7 +4,7 @@ import { LogOut, Menu, MessageSquare, PanelLeftClose, Plus, Radar, Search, Trash
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import type { ChatSession } from "@/types/agent";
-import type { User } from "@/types/auth";
+import { useAuthStore } from "@/lib/auth-store";
 
 type ChatHistoryPanelProps = {
   activeChatId: number | null;
@@ -15,7 +15,6 @@ type ChatHistoryPanelProps = {
   isLoadingMore: boolean;
   isOpen: boolean;
   search: string;
-  user: User;
   onClose: () => void;
   onDelete: (chatId: number) => void;
   onLogout: () => void;
@@ -35,7 +34,6 @@ export function ChatHistoryPanel({
   isLoadingMore,
   isOpen,
   search,
-  user,
   onClose,
   onDelete,
   onLogout,
@@ -45,6 +43,8 @@ export function ChatHistoryPanel({
   onSearchChange,
   onSelect,
 }: ChatHistoryPanelProps) {
+  const { user } = useAuthStore();
+
   return (
     <>
       <button
@@ -171,11 +171,11 @@ export function ChatHistoryPanel({
         <div className="border-t border-border pt-2">
           <div className="group flex min-h-14 items-center gap-3 rounded-lg px-2 hover:bg-secondary/65">
             <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-secondary text-sm font-bold text-primary">
-              {user.name.trim().charAt(0).toUpperCase()}
+              {user && user.name.trim().charAt(0).toUpperCase()}
             </span>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-bold text-foreground">{user.name}</p>
-              <p className="truncate text-xs text-muted-foreground">{user.email}</p>
+              <p className="truncate text-sm font-bold text-foreground">{user && user.name}</p>
+              <p className="truncate text-xs text-muted-foreground">{user && user.email}</p>
             </div>
             <button
               className="grid size-10 place-items-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none"

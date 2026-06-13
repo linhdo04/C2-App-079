@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { ReactNode } from "react";
 import { Providers } from "@/components/providers";
 import "./globals.css";
+import CheckAuth from "@/components/layout/check-auth";
 
 export const metadata: Metadata = {
   title: {
@@ -21,9 +22,12 @@ export default function RootLayout({
       lang="vi"
       className="h-full antialiased"
       data-scroll-behavior="smooth"
+      trancy-version="7.8.7"
     >
       <body className="min-h-full flex flex-col">
-        <Providers>{children}</Providers>
+        <Providers>
+          <CheckAuth>{children}</CheckAuth>
+        </Providers>
       </body>
     </html>
   );

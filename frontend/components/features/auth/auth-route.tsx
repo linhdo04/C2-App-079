@@ -4,17 +4,16 @@ import { useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Bot, CloudSun, Radar, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
 import { AuthPanel } from "@/components/features/auth/auth-panel";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
-import { useCurrentUserQuery, useLoginMutation, useRegisterMutation } from "@/lib/api-hooks";
-import { hasAuthSession, saveSession } from "@/lib/auth-client";
+import { useLoginMutation, useRegisterMutation } from "@/lib/api-hooks";
+import { saveSession } from "@/lib/auth-client";
 import { useAuthStore } from "@/lib/auth-store";
 import type { AuthFormValues } from "@/lib/validation";
 import type { AuthMode } from "@/types/auth";
+import { toast } from "sonner";
 
 type AuthRouteProps = {
   mode: AuthMode;
@@ -23,58 +22,15 @@ type AuthRouteProps = {
 export function AuthRoute({ mode }: AuthRouteProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
-  const { authStatus, clearAuth, setAuthenticated, setBooting, setUser } = useAuthStore();
+  const { authStatus, setAuthenticated } = useAuthStore();
   const isAuthenticated = authStatus === "authenticated";
-  const currentUserQuery = useCurrentUserQuery(isAuthenticated);
   const registerMutation = useRegisterMutation();
   const loginMutation = useLoginMutation();
   const isLoading = registerMutation.isPending || loginMutation.isPending;
-  const isCheckingSession = isAuthenticated && currentUserQuery.isFetching;
+  const isCheckingSession = isAuthenticated;
   const alternateMode = mode === "login" ? "register" : "login";
 
-  useEffect(() => {
-    if (!hasAuthSession()) {
-      clearAuth();
-      setBooting(false);
-      return;
-    }
-
-    setAuthenticated(true);
-  }, [clearAuth, setAuthenticated, setBooting]);
-
-  useEffect(() => {
-    if (currentUserQuery.data === undefined) {
-      return;
-    }
-
-    setUser(currentUserQuery.data);
-    setBooting(false);
-    router.replace("/agent");
-  }, [currentUserQuery.data, router, setBooting, setUser]);
-
-  useEffect(() => {
-    if (!isAuthenticated || currentUserQuery.error === null) {
-      return;
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      clearAuth();
-      queryClient.removeQueries({ queryKey: ["auth"] });
-      setBooting(false);
-      setMessage("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.");
-    }, 0);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, [clearAuth, currentUserQuery.error, isAuthenticated, queryClient, setBooting]);
-
   async function handleSubmit(values: AuthFormValues) {
-    setError("");
-    setMessage("");
-
     try {
       if (mode === "register") {
         await registerMutation.mutateAsync({
@@ -91,9 +47,9 @@ export function AuthRoute({ mode }: AuthRouteProps) {
       saveSession(tokenResponse);
       queryClient.removeQueries({ queryKey: ["auth"] });
       setAuthenticated(true);
-      setMessage(mode === "register" ? "Tài khoản đã được tạo. Đang mở workspace..." : "Đăng nhập thành công.");
+      toast.info(mode === "register" ? "Tài khoản đã được tạo. Đang mở workspace..." : "Đăng nhập thành công.");
     } catch (apiError) {
-      setError(apiError instanceof Error ? apiError.message : "Không thể xử lý yêu cầu. Vui lòng thử lại.");
+      toast.error(apiError instanceof Error ? apiError.message : "Không thể xử lý yêu cầu. Vui lòng thử lại.");
     }
   }
 
@@ -162,15 +118,6 @@ export function AuthRoute({ mode }: AuthRouteProps) {
                 {mode === "register" ? "Tạo tài khoản" : "Đăng nhập"}
               </h2>
             </div>
-            {(message.length > 0 || error.length > 0) && (
-              <Alert
-                className="mb-4"
-                variant={error.length > 0 ? "destructive" : "success"}
-                role={error.length > 0 ? "alert" : "status"}
-              >
-                <AlertDescription>{error.length > 0 ? error : message}</AlertDescription>
-              </Alert>
-            )}
 
             {isCheckingSession ? (
               <Card>

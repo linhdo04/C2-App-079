@@ -62,11 +62,10 @@ export function useAgentAskMutation() {
   });
 }
 
-export function useChatsQuery(isAuthenticated: boolean, search: string) {
+export function useChatsQuery(search: string) {
   const normalizedSearch = search.trim();
 
   return useInfiniteQuery({
-    enabled: isAuthenticated,
     queryKey: ["agent", "chats", normalizedSearch],
     initialPageParam: null as string | null,
     queryFn: ({ pageParam }) => {
@@ -83,9 +82,9 @@ export function useChatsQuery(isAuthenticated: boolean, search: string) {
   });
 }
 
-export function useChatQuery(isAuthenticated: boolean, chatId: number | null) {
+export function useChatQuery(chatId: number | null) {
   return useQuery({
-    enabled: isAuthenticated && chatId !== null,
+    enabled: chatId !== null,
     queryKey: ["agent", "chats", chatId],
     queryFn: () =>
       requestProtected<ApiResponse<ChatDetail>>(`/agent/chats/${chatId}`).then((response) => response.data),
