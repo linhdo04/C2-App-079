@@ -5,6 +5,11 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import type { ChatSession } from "@/types/agent";
 import { useAuthStore } from "@/lib/auth-store";
+import { PublicRouter } from "@/enums/public-routers";
+import { useLogoutMutation } from "@/lib/api-hooks";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
 
 type ChatHistoryPanelProps = {
   activeChatId: number | null;
@@ -17,7 +22,6 @@ type ChatHistoryPanelProps = {
   search: string;
   onClose: () => void;
   onDelete: (chatId: number) => void;
-  onLogout: () => void;
   onLoadMore: () => void;
   onNewChat: () => void;
   onOpen: () => void;
@@ -36,14 +40,29 @@ export function ChatHistoryPanel({
   search,
   onClose,
   onDelete,
-  onLogout,
   onLoadMore,
   onNewChat,
   onOpen,
   onSearchChange,
   onSelect,
 }: ChatHistoryPanelProps) {
-  const { user } = useAuthStore();
+  const router = useRouter();
+  const clearAuth = useAuthStore((state) => state.clearAuth);
+  const user = useAuthStore((state) => state.user);
+  const logoutMutation = useLogoutMutation();
+  const queryClient = useQueryClient();
+
+  async function handleLogout() {
+    try {
+      await logoutMutation.mutateAsync();
+      queryClient.removeQueries({ queryKey: ["auth"] });
+      clearAuth();
+      router.replace(PublicRouter.Home);
+      toast.success("Bạn đã đăng xuất thành công.");
+    } catch {
+      toast.error("Cố lỗi xảy ra, vui lòng thử lại sau.");
+    }
+  }
 
   return (
     <>
@@ -181,7 +200,7 @@ export function ChatHistoryPanel({
               className="grid size-10 place-items-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none"
               type="button"
               aria-label="Đăng xuất"
-              onClick={onLogout}
+              onClick={handleLogout}
             >
               <LogOut className="size-4" />
             </button>

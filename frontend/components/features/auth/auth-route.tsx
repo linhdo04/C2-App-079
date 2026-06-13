@@ -22,12 +22,12 @@ type AuthRouteProps = {
 export function AuthRoute({ mode }: AuthRouteProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { authStatus, setAuthenticated } = useAuthStore();
+  const authStatus = useAuthStore((state) => state.authStatus);
+  const setAuthenticated = useAuthStore((state) => state.setAuthenticated);
   const isAuthenticated = authStatus === "authenticated";
   const registerMutation = useRegisterMutation();
   const loginMutation = useLoginMutation();
   const isLoading = registerMutation.isPending || loginMutation.isPending;
-  const isCheckingSession = isAuthenticated;
   const alternateMode = mode === "login" ? "register" : "login";
 
   async function handleSubmit(values: AuthFormValues) {
@@ -45,9 +45,11 @@ export function AuthRoute({ mode }: AuthRouteProps) {
         password: values.password,
       });
       saveSession(tokenResponse);
-      queryClient.removeQueries({ queryKey: ["auth"] });
       setAuthenticated(true);
+      queryClient.removeQueries({ queryKey: ["auth"] });
+      await queryClient.invalidateQueries({ queryKey: ["auth"] });
       toast.info(mode === "register" ? "Tài khoản đã được tạo. Đang mở workspace..." : "Đăng nhập thành công.");
+      router.replace("/dashboard");
     } catch (apiError) {
       toast.error(apiError instanceof Error ? apiError.message : "Không thể xử lý yêu cầu. Vui lòng thử lại.");
     }
@@ -119,7 +121,7 @@ export function AuthRoute({ mode }: AuthRouteProps) {
               </h2>
             </div>
 
-            {isCheckingSession ? (
+            {isAuthenticated ? (
               <Card>
                 <CardContent className="flex items-center gap-2 p-4 text-sm font-medium text-muted-foreground sm:p-6">
                   <Spinner />

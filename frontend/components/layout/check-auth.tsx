@@ -9,33 +9,39 @@ import { usePathname, useRouter } from "next/navigation";
 import { ReactNode, useEffect } from "react";
 import Loading from "./loading";
 
+const AUTHENTICATED_ENTRY_PATH = "/dashboard";
+
 export default function CheckAuth({ children }: { children: ReactNode }) {
-  const { authStatus, setAuthenticated, setBooting, setUser, clearAuth } = useAuthStore();
+  const { setAuthenticated, setUser, clearAuth } = useAuthStore();
+  const authStatus = useAuthStore((state) => state.authStatus);
   const currentUserQuery = useCurrentUserQuery(true);
   const queryClient = useQueryClient();
   const router = useRouter();
   const pathname = usePathname();
 
   const isAuthenticated = authStatus === "authenticated";
+  const isCheckingAuth = currentUserQuery.isPending || currentUserQuery.isFetching;
 
   useEffect(() => {
+    if (isCheckingAuth) {
+      return;
+    }
+
     if (currentUserQuery.data === undefined) {
       setAuthenticated(false);
-      setBooting(false);
       if (!publicRouters.includes(pathname)) {
         router.replace(PublicRouter.Login);
       }
       return;
     }
 
-    if (publicRouters.includes(pathname)) {
-      router.replace(PublicRouter.Home);
-    }
-
     setUser(currentUserQuery.data);
-    setBooting(false);
     setAuthenticated(true);
-  }, [currentUserQuery.data, setBooting, setUser, setAuthenticated, pathname, router]);
+
+    if (publicRouters.includes(pathname) && pathname !== PublicRouter.Home) {
+      router.replace(AUTHENTICATED_ENTRY_PATH);
+    }
+  }, [currentUserQuery.data, isCheckingAuth, pathname, router, setAuthenticated, setUser]);
 
   useEffect(() => {
     if (!isAuthenticated || currentUserQuery.error === null) {
@@ -45,15 +51,18 @@ export default function CheckAuth({ children }: { children: ReactNode }) {
     const timeoutId = window.setTimeout(() => {
       clearAuth();
       queryClient.removeQueries({ queryKey: ["auth"] });
-      setBooting(false);
+
+      if (!publicRouters.includes(pathname)) {
+        router.replace(PublicRouter.Login);
+      }
     }, 0);
 
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [clearAuth, currentUserQuery.error, isAuthenticated, queryClient, setBooting]);
+  }, [clearAuth, currentUserQuery.error, isAuthenticated, pathname, queryClient, router]);
 
-  if (currentUserQuery.isFetching) {
+  if (isCheckingAuth) {
     return <Loading />;
   }
 
