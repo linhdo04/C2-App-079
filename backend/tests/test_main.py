@@ -5,6 +5,7 @@ from sqlalchemy import DateTime
 from starlette.middleware.errors import ServerErrorMiddleware
 
 from api.main import app
+from api.middlewares.domain import EnforceDomainMiddleware
 from core import settings
 from core.config import Settings
 from models import (
@@ -23,6 +24,7 @@ def test_cors_is_the_outermost_middleware() -> None:
 
     assert isinstance(middleware_stack, ServerErrorMiddleware)
     assert isinstance(middleware_stack.app, CORSMiddleware)
+    assert isinstance(middleware_stack.app.app, EnforceDomainMiddleware)
 
 
 def test_api_prefix_is_applied_to_application_routes() -> None:
