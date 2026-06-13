@@ -13,7 +13,7 @@ from core import settings, setup_logging
 from infrastructure import close_db, close_redis, get_redis, init_db, init_redis
 
 from .dependencies import get_current_user
-from .middlewares import domain, error_handling, logging, rate_limiting
+from .middlewares import error_handling, logging, rate_limiting
 from .responses import ERROR_RESPONSES, DataResponse
 from .routes import agent_router, auth_router, dashboard_router
 
@@ -61,11 +61,6 @@ app.add_middleware(
     },
 )
 app.add_middleware(error_handling.ErrorHandlingMiddleware, debug=settings.app_debug)
-app.add_middleware(
-    domain.EnforceDomainMiddleware,
-    allowed_host=settings.app_domain,
-    app_env=settings.app_env,
-)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.frontend_origins,
