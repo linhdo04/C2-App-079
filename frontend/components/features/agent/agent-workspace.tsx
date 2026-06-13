@@ -6,19 +6,11 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import { AgentQuestionPanel } from "@/components/features/agent/agent-question-panel";
 import { ChatHistoryPanel } from "@/components/features/agent/chat-history-panel";
 import { Spinner } from "@/components/ui/spinner";
-import {
-  useChatQuery,
-  useChatsQuery,
-  useCreateChatMutation,
-  useDeleteChatMutation,
-  useLogoutMutation,
-} from "@/lib/api-hooks";
+import { useChatQuery, useChatsQuery, useCreateChatMutation, useDeleteChatMutation } from "@/lib/api-hooks";
 import { requestProtectedEventStream } from "@/lib/api-client";
 import type { AgentQuestionFormValues } from "@/lib/validation";
 import type { ChatMessage, ChatMessageResponse } from "@/types/agent";
 import { toast } from "sonner";
-import { PublicRouter } from "@/enums/public-routers";
-import { useAuthStore } from "@/lib/auth-store";
 
 type AgentWorkspaceProps = {
   chatId?: number | null;
@@ -41,8 +33,6 @@ export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
   const chatQuery = useChatQuery(chatId);
   const createChatMutation = useCreateChatMutation();
   const deleteChatMutation = useDeleteChatMutation();
-  const logoutMutation = useLogoutMutation();
-  const { clearAuth } = useAuthStore();
 
   const activeChat = chatQuery.data;
   const messages = useMemo(() => activeChat?.messages ?? [], [activeChat?.messages]);
@@ -198,17 +188,6 @@ export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
     }
   }
 
-  async function handleLogout() {
-    try {
-      await logoutMutation.mutateAsync();
-      router.push(PublicRouter.Home);
-      clearAuth();
-      toast.success("Bạn đã đăng xuất thành công.");
-    } catch {
-      toast.error("Cố lỗi xảy ra, vui lòng thử lại sau.");
-    }
-  }
-
   return (
     <main className="app-shell relative flex h-dvh overflow-hidden text-foreground">
       <div className="grid-surface pointer-events-none absolute inset-0" />
@@ -223,7 +202,6 @@ export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
         search={search}
         onClose={() => setIsHistoryOpen(false)}
         onDelete={handleDelete}
-        onLogout={handleLogout}
         onLoadMore={() => chatsQuery.fetchNextPage()}
         onNewChat={handleNewChat}
         onOpen={() => setIsHistoryOpen(true)}

@@ -6,14 +6,14 @@ import { ArrowRight } from "lucide-react";
 import Link from "next/link";
 
 function Nav() {
-  const { authStatus, isBooting } = useAuthStore();
+  const authStatus = useAuthStore((state) => state.authStatus);
 
   return (
     <nav
       className="flex items-center gap-2"
       aria-label="Điều hướng chính"
     >
-      {authStatus === "authenticated" || isBooting ? (
+      {authStatus === "authenticated" ? (
         <>
           <Button
             asChild
@@ -51,11 +51,11 @@ function Nav() {
 }
 
 function GuestLoginButton() {
-  const { authStatus, isBooting } = useAuthStore();
+  const authStatus = useAuthStore((state) => state.authStatus);
 
   return (
     <>
-      {isBooting || authStatus === "authenticated" ? (
+      {authStatus === "authenticated" ? (
         <Button
           asChild
           size="lg"
