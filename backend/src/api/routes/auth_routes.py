@@ -108,6 +108,7 @@ def _set_refresh_cookie(
         secure=settings.app_env == "production",
         httponly=True,
         samesite="lax",
+        domain=f".{settings.app_domain}" if settings.app_env == "production" else None,
     )
 
 
@@ -118,6 +119,7 @@ def _clear_refresh_cookie(response: Response) -> None:
         secure=settings.app_env == "production",
         httponly=True,
         samesite="lax",
+        domain=f".{settings.app_domain}" if settings.app_env == "production" else None,
     )
 
 
