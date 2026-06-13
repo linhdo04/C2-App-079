@@ -5,21 +5,20 @@ import { useRouter } from "next/navigation";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { AgentQuestionPanel } from "@/components/features/agent/agent-question-panel";
 import { ChatHistoryPanel } from "@/components/features/agent/chat-history-panel";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Spinner } from "@/components/ui/spinner";
 import {
   useChatQuery,
   useChatsQuery,
   useCreateChatMutation,
-  useCurrentUserQuery,
   useDeleteChatMutation,
   useLogoutMutation,
 } from "@/lib/api-hooks";
-import { ApiError, requestProtectedEventStream } from "@/lib/api-client";
-import { hasAuthSession } from "@/lib/auth-client";
-import { useAuthStore } from "@/lib/auth-store";
+import { requestProtectedEventStream } from "@/lib/api-client";
 import type { AgentQuestionFormValues } from "@/lib/validation";
 import type { ChatMessage, ChatMessageResponse } from "@/types/agent";
+import { toast } from "sonner";
+import { PublicRouter } from "@/enums/public-routers";
+import { useAuthStore } from "@/lib/auth-store";
 
 type AgentWorkspaceProps = {
   chatId?: number | null;
@@ -28,9 +27,7 @@ type AgentWorkspaceProps = {
 export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const [error, setError] = useState("");
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
-  const [message, setMessage] = useState("");
   const [pendingQuestion, setPendingQuestion] = useState("");
   const [search, setSearch] = useState("");
   const [streamingAnswer, setStreamingAnswer] = useState("");
@@ -39,15 +36,13 @@ export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
   const tokenBufferRef = useRef("");
   const animationFrameRef = useRef<number | null>(null);
   const deferredSearch = useDeferredValue(search);
-  const { authStatus, clearAuth, isBooting, setAuthenticated, setBooting, setUser, user } = useAuthStore();
-  const isAuthenticated = authStatus === "authenticated";
-  const currentUserQuery = useCurrentUserQuery(isAuthenticated);
-  const chatsQuery = useChatsQuery(isAuthenticated, deferredSearch);
+  const chatsQuery = useChatsQuery(deferredSearch);
   const chats = useMemo(() => chatsQuery.data?.pages.flatMap((page) => page.data) ?? [], [chatsQuery.data]);
-  const chatQuery = useChatQuery(isAuthenticated, chatId);
+  const chatQuery = useChatQuery(chatId);
   const createChatMutation = useCreateChatMutation();
   const deleteChatMutation = useDeleteChatMutation();
   const logoutMutation = useLogoutMutation();
+  const { clearAuth } = useAuthStore();
 
   const activeChat = chatQuery.data;
   const messages = useMemo(() => activeChat?.messages ?? [], [activeChat?.messages]);
@@ -73,7 +68,6 @@ export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
     return [...messages, ...pendingMessages];
   }, [messages, pendingQuestion, streamingAnswer]);
   const isSending = createChatMutation.isPending || isStreaming;
-  const queryError = chatsQuery.error ?? chatQuery.error;
 
   const flushTokenBuffer = useCallback(() => {
     animationFrameRef.current = null;
@@ -104,82 +98,7 @@ export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
     [],
   );
 
-  const resetAuthState = useCallback(
-    (notice?: string) => {
-      clearAuth();
-      queryClient.removeQueries({ queryKey: ["auth"] });
-      queryClient.removeQueries({ queryKey: ["agent"] });
-      if (notice !== undefined) {
-        setMessage(notice);
-      }
-    },
-    [clearAuth, queryClient],
-  );
-
-  useEffect(() => {
-    if (!hasAuthSession()) {
-      clearAuth();
-      setBooting(false);
-      return;
-    }
-
-    setAuthenticated(true);
-  }, [clearAuth, setAuthenticated, setBooting]);
-
-  useEffect(() => {
-    if (isBooting || isAuthenticated) {
-      return;
-    }
-
-    router.replace("/login");
-  }, [isAuthenticated, isBooting, router]);
-
-  useEffect(() => {
-    if (currentUserQuery.data === undefined) {
-      return;
-    }
-
-    setUser(currentUserQuery.data);
-    setBooting(false);
-  }, [currentUserQuery.data, setBooting, setUser]);
-
-  useEffect(() => {
-    if (!isAuthenticated || currentUserQuery.error === null) {
-      return;
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      resetAuthState("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.");
-      setBooting(false);
-    }, 0);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [currentUserQuery.error, isAuthenticated, resetAuthState, setBooting]);
-
-  useEffect(() => {
-    if (queryError === null || queryError === undefined) {
-      return;
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      if (queryError instanceof ApiError && queryError.status === 401) {
-        resetAuthState("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.");
-        return;
-      }
-      setError(queryError instanceof Error ? queryError.message : "Không thể tải lịch sử trò chuyện.");
-    }, 0);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [queryError, resetAuthState]);
-
   async function handleAsk(values: AgentQuestionFormValues) {
-    if (!isAuthenticated) {
-      setError("Vui lòng đăng nhập trước khi hỏi AI Agent.");
-      return false;
-    }
-
-    setError("");
-    setMessage("");
     setPendingQuestion(values.question);
     setStreamingAnswer("");
     setStreamingStatus("Đang kết nối...");
@@ -246,11 +165,7 @@ export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
       }
       return true;
     } catch (apiError) {
-      if (apiError instanceof ApiError && apiError.status === 401) {
-        resetAuthState("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.");
-      } else {
-        setError(apiError instanceof Error ? apiError.message : "Không thể gửi câu hỏi. Vui lòng thử lại.");
-      }
+      toast.error(apiError instanceof Error ? apiError.message : "Không thể gửi câu hỏi. Vui lòng thử lại.");
       return false;
     } finally {
       setPendingQuestion("");
@@ -267,16 +182,10 @@ export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
 
   function handleNewChat() {
     setIsHistoryOpen(false);
-    setError("");
     router.push("/agent");
   }
 
   async function handleDelete(chatIdToDelete: number) {
-    if (!isAuthenticated || !window.confirm("Bạn có chắc muốn xoá cuộc trò chuyện này?")) {
-      return;
-    }
-
-    setError("");
     try {
       await deleteChatMutation.mutateAsync(chatIdToDelete);
       queryClient.removeQueries({ queryKey: ["agent", "chats", chatIdToDelete] });
@@ -285,42 +194,19 @@ export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
       }
       await queryClient.invalidateQueries({ queryKey: ["agent", "chats"], exact: false });
     } catch (apiError) {
-      setError(apiError instanceof Error ? apiError.message : "Không thể xoá cuộc trò chuyện.");
+      toast.error(apiError instanceof Error ? apiError.message : "Không thể xoá cuộc trò chuyện.");
     }
   }
 
   async function handleLogout() {
-    if (!isAuthenticated) {
-      resetAuthState();
-      return;
-    }
-
-    setError("");
-    setMessage("");
     try {
       await logoutMutation.mutateAsync();
+      router.push(PublicRouter.Home);
+      clearAuth();
+      toast.success("Bạn đã đăng xuất thành công.");
     } catch {
-      // Clear the local session even if server-side revoke cannot complete.
-    } finally {
-      resetAuthState("Bạn đã đăng xuất.");
+      toast.error("Cố lỗi xảy ra, vui lòng thử lại sau.");
     }
-  }
-
-  const loadingLabel = useMemo(() => {
-    if (isBooting) return "Đang kiểm tra phiên đăng nhập...";
-    if (isAuthenticated && user === null) return "Đang tải hồ sơ người dùng...";
-    return "Đang chuyển tới trang đăng nhập...";
-  }, [isAuthenticated, isBooting, user]);
-
-  if (isBooting || (isAuthenticated && user === null) || !isAuthenticated || user === null) {
-    return (
-      <main className="app-shell flex h-dvh items-center justify-center px-4 text-foreground">
-        <p className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-          <Spinner />
-          {loadingLabel}
-        </p>
-      </main>
-    );
   }
 
   return (
@@ -335,7 +221,6 @@ export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
         isLoadingMore={chatsQuery.isFetchingNextPage}
         isOpen={isHistoryOpen}
         search={search}
-        user={user}
         onClose={() => setIsHistoryOpen(false)}
         onDelete={handleDelete}
         onLogout={handleLogout}
@@ -348,16 +233,6 @@ export function AgentWorkspace({ chatId = null }: AgentWorkspaceProps) {
           router.push(`/agent/${selectedChatId}`);
         }}
       />
-
-      {(message.length > 0 || error.length > 0) && (
-        <Alert
-          className="absolute top-3 right-3 left-14 z-20 mx-auto max-w-xl shadow-2xl lg:left-[276px]"
-          variant={error.length > 0 ? "destructive" : "success"}
-          role={error.length > 0 ? "alert" : "status"}
-        >
-          <AlertDescription>{error.length > 0 ? error : message}</AlertDescription>
-        </Alert>
-      )}
 
       {chatQuery.isLoading && chatId !== null ? (
         <div className="relative flex min-w-0 flex-1 items-center justify-center bg-background/55">
