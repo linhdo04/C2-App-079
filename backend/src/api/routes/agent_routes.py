@@ -274,7 +274,7 @@ async def _load_agent_history(
     )
     messages = list(reversed(result.scalars().all()))
     return [
-        ConversationMessage(role=cast(Any, message.role.value), content=message.message)
+        ConversationMessage(role=cast(Any, message.role), content=message.message)
         for message in messages
     ]
 
@@ -288,10 +288,6 @@ async def ask(
     req: AskRequest,
     current_user: Annotated[UserModel, Depends(get_current_user)],
 ) -> DataResponse[AgentAnswerPublic]:
-    """Endpoint để hỏi agent bằng ngôn ngữ tự nhiên.
-
-    Trả về JSON: {"answer": "..."}
-    """
     try:
         # Prefer the async helper which normalizes sync/async implementations
         if current_user.id is None:

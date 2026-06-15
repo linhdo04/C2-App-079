@@ -27,3 +27,4 @@ checkpoints/
 logs/
 skills-lock.json
 .agents/skills/
+.codegraph
