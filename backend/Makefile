@@ -1,11 +1,13 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help run test lint lint-check format format-check typecheck check db-migrate db-upgrade db-downgrade
+.PHONY: help run test lint lint-check format format-check typecheck check db-migrate db-upgrade db-downgrade db-seed
 
 help:
 	@echo ""
 	@echo "Available commands:"
 	@echo ""
+	@echo "  make install           Install dependencies"
+	@echo "  make setup             Install dependencies + pre-commit hooks"
 	@echo "  make run               Start the FastAPI development server"
 	@echo "  make test              Run tests"
 	@echo "  make lint-check        Check code style with Ruff"
@@ -20,28 +22,35 @@ help:
 	@echo "                         Create a new Alembic migration"
 	@echo "  make db-upgrade        Apply all pending migrations"
 	@echo "  make db-downgrade      Roll back the latest migration"
+	@echo "  make db-seed           Seed demo user, mission, sensor and telemetry"
 	@echo ""
 
+install:
+	uv sync
+
+setup:
+	uv sync --extra dev && pre-commit install
+
 run:
-	uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
+	uv run uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
 
 test:
-	pytest
+	uv run pytest
 
 lint-check:
-	ruff check .
+	uv run ruff check .
 
 lint:
-	ruff check . --fix
+	uv run ruff check . --fix
 
 format:
-	ruff format .
+	uv run ruff format .
 
 format-check:
-	ruff format --check .
+	uv run ruff format --check .
 
 typecheck:
-	mypy .
+	uv run mypy .
 
 check: lint-check format-check typecheck test
 
@@ -50,10 +59,13 @@ db-migrate:
 		echo "Error: Migration name is required. Example: make db-migrate m='add_new_table'"; \
 		exit 1; \
 	fi
-	alembic revision --autogenerate -m "$(m)"
+	uv run alembic revision --autogenerate -m "$(m)"
 
 db-upgrade:
-	alembic upgrade head
+	uv run alembic upgrade head
 
 db-downgrade:
-	alembic downgrade -1
+	uv run alembic downgrade -1
+
+db-seed:
+	uv run python -m scripts.seed_demo

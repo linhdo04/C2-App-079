@@ -7,6 +7,22 @@ function writeAuthCookie(maxAgeSeconds: number) {
   document.cookie = `${AUTH_COOKIE_NAME}=1; Path=/; Max-Age=${maxAgeSeconds}; SameSite=Lax`;
 }
 
+function isStoredSession(value: unknown): value is StoredSession {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const session = value as Partial<StoredSession>;
+  return (
+    typeof session.access_token === "string" &&
+    session.access_token.length > 0 &&
+    session.token_type === "bearer" &&
+    typeof session.expires_in === "number" &&
+    typeof session.refresh_expires_in === "number" &&
+    typeof session.received_at === "number"
+  );
+}
+
 export function readSession(): StoredSession | null {
   if (typeof window === "undefined") {
     return null;
@@ -18,15 +34,21 @@ export function readSession(): StoredSession | null {
   }
 
   try {
-    const parsedSession = JSON.parse(rawSession) as StoredSession & {
+    const parsedSession = JSON.parse(rawSession) as unknown;
+    if (!isStoredSession(parsedSession)) {
+      window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+      return null;
+    }
+
+    const storedSession = parsedSession as StoredSession & {
       refresh_token?: string;
     };
     const session: StoredSession = {
-      access_token: parsedSession.access_token,
-      token_type: parsedSession.token_type,
-      expires_in: parsedSession.expires_in,
-      refresh_expires_in: parsedSession.refresh_expires_in,
-      received_at: parsedSession.received_at,
+      access_token: storedSession.access_token,
+      token_type: storedSession.token_type,
+      expires_in: storedSession.expires_in,
+      refresh_expires_in: storedSession.refresh_expires_in,
+      received_at: storedSession.received_at,
     };
     const refreshExpiresAt = session.received_at + session.refresh_expires_in * 1000;
     const refreshMaxAge = Math.floor((refreshExpiresAt - Date.now()) / 1000);
@@ -35,7 +57,7 @@ export function readSession(): StoredSession | null {
       writeAuthCookie(refreshMaxAge);
     }
 
-    if (parsedSession.refresh_token !== undefined) {
+    if (storedSession.refresh_token !== undefined) {
       window.localStorage.setItem(TOKEN_STORAGE_KEY, JSON.stringify(session));
     }
 
@@ -44,6 +66,16 @@ export function readSession(): StoredSession | null {
     window.localStorage.removeItem(TOKEN_STORAGE_KEY);
     return null;
   }
+}
+
+export function hasAuthSession() {
+  if (typeof document === "undefined") {
+    return false;
+  }
+
+  return (
+    readSession() !== null || document.cookie.split("; ").some((cookie) => cookie.startsWith(`${AUTH_COOKIE_NAME}=`))
+  );
 }
 
 export function saveSession(tokenResponse: TokenResponse): StoredSession {

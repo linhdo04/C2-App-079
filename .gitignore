@@ -25,3 +25,5 @@ checkpoints/
 
 # Training run logs (per-epoch JSON, regenerated each run)
 logs/
+skills-lock.json
+.agents/skills/

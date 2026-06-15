@@ -37,18 +37,18 @@ FastAPI app (`src/api/main.py`)
   +-- RateLimitMiddleware
   +-- ErrorHandlingMiddleware
   |
-  +-- GET /
+  +-- GET /api/health
   +-- POST /agent/ask
         |
         v
-      run_agent(question)
+      run_agent(question, user_id)
         |
         v
-      LangGraph: database -> search -> weather -> END
+      LangGraph: route_intent -> execute_tools -> synthesize_answer -> END
         |
-        +-- PostgreSQL via SQLModel/asyncpg
+        +-- PostgreSQL telemetry via SQLModel/asyncpg
         +-- Tavily web search
-        +-- Open-Meteo forecast
+        +-- Gemini answer synthesis
 ```
 
 ## Application Lifecycle
@@ -105,8 +105,8 @@ Một số biến có default trong code: `APP_ENV`, `APP_DEBUG`, `LOG_LEVEL` v�
 `redis://:<password>@<host>:<port>`. Nếu `REDIS_PASSWORD` để trống, cần kiểm tra
 lại URL thực tế vì property hiện vẫn format phần password.
 
-Lưu ý: `API_PREFIX` hiện có trong config nhưng chưa được dùng khi include
-router; route hiện tại là `/agent/ask`, không phải `/api/agent/ask`.
+`API_PREFIX` được áp dụng qua router cha trong `src/api/main.py`. Với cấu hình
+`API_PREFIX=/api`, route agent là `/api/agent/ask`.
 
 ## HTTP Layer
 
@@ -128,7 +128,9 @@ Response thành công:
 
 ```json
 {
-  "answer": "string"
+  "data": {
+    "answer": "string"
+  }
 }
 ```
 
@@ -137,9 +139,10 @@ Any` vẫn còn trong file route nhưng không tham gia xử lý request hiện 
 
 `src/api/main.py` cũng khai báo:
 
-- `GET /` trả `{"message": "Hello, FastAPI with Uvicorn!"}`
+- `GET /api/health` trả `{"data":{"status":"healthy"}}` và không yêu cầu xác
+  thực.
 
-Hiện chưa có route `/health` hoặc `/metrics`, dù rate limiter đang exclude các
+Hiện chưa có route `/metrics`, dù rate limiter đang exclude các
 path này.
 
 ### Middleware
@@ -230,7 +233,7 @@ Các bảng hiện có:
 | `UserModel` | `users` | `name`, `email` unique |
 | `MissionModel` | `missions` | owner user, status, started/ended timestamps |
 | `IoTNodeModel` | `iot_nodes` | serial number unique, location, metadata JSON |
-| `TelemetryModel` | `telemetry` | node telemetry, timestamp, location, motion fields, data JSON |
+| `TelemetryModel` | `telemetry` | node telemetry, timestamp, location, motion, temperature, humidity, data JSON |
 | `FlightPathModel` | `flight_paths` | mission path JSON, distance, duration, flown flag |
 | `CoverageResultModel` | `coverage_results` | mission/path coverage percentage and details JSON |
 | `ReportModel` | `reports` | mission report, author, content, summary, attachments JSON |
@@ -238,8 +241,12 @@ Các bảng hiện có:
 
 Operational notes:
 
-- `TelemetryModel` is likely the highest-volume table; add indexes and retention
-  policy before production ingestion grows.
+- Foreign keys are indexed, and telemetry/chat history include composite indexes
+  for parent-and-timestamp queries.
+- Domain ranges and finite status/role values are enforced by both model
+  validation and database check constraints.
+- `TelemetryModel` is likely the highest-volume table; add a retention policy
+  before production ingestion grows.
 - `deleted_at` enables soft delete semantics, but no repository/query helper
   currently enforces filtering deleted records.
 - JSON fields provide flexibility but need validation at service boundaries.
@@ -289,23 +296,22 @@ Current request flow:
 
 ```text
 POST /agent/ask
-  -> run_agent(question)
+  -> run_agent(question, current_user.id)
   -> HumanMessage(question)
   -> graph.ainvoke(initial_state)
-  -> database node
-  -> search node
-  -> weather node
-  -> response content from last ToolMessage
+  -> route intent
+  -> execute selected tools
+  -> synthesize answer with Gemini
+  -> state["answer"]
 ```
 
 Important current behavior:
 
-- Graph workflow is fixed: `database -> search -> weather -> END`.
-- Graph does not perform intent routing.
-- Gemini client is initialized in `agent.py`, but the graph currently does not
-  call the LLM.
-- `SYSTEM_PROMPT` exists in `prompts.py`, but is not injected into graph state.
-- `analyze_crop_data` is exported from tools but is not connected to the graph.
+- Telemetry intent reads temperature and humidity observations from PostgreSQL.
+- Telemetry queries are filtered through mission ownership using current user ID.
+- Telemetry observations are historical measurements, not weather forecasts.
+- Search uses Tavily; crop analysis uses values extracted from the question.
+- Gemini synthesizes the final answer from tool results and tool limitations.
 
 For agent implementation details, use:
 
@@ -355,15 +361,14 @@ uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
 - Keep secrets in environment variables or a secret manager, not in source.
 - Redis rate limiting is safe for multiple instances because checks are atomic
   Lua scripts.
-- Add health/readiness endpoints before production orchestration depends on
-  `/health`.
+- Mở rộng health check thành readiness check nếu orchestration cần kiểm tra
+  PostgreSQL hoặc Redis.
 - Add metrics/tracing if agent latency and tool failures need operational
   visibility.
 
 ## Known Gaps
 
-- `API_PREFIX` is configured but not applied to routes.
-- `/health` and `/metrics` are excluded from rate limiting but not implemented.
+- `/metrics` được exclude khỏi rate limiting nhưng chưa được implement.
 - LangGraph logging handler exists but is not wired into agent execution.
 - Agent docs describe current limitations; the runtime does not yet synthesize
   final answers with Gemini.

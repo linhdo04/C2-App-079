@@ -27,20 +27,22 @@ Các tool hiện có:
 
 | Tool | Trạng thái trong graph | Mục đích |
 | --- | --- | --- |
-| `query_crop_database` | Dùng khi intent `database` | Truy vấn dữ liệu người dùng trong Postgres |
 | `web_search` | Dùng khi intent `search` | Tìm kiếm qua Tavily |
-| `get_weather_forecast` | Dùng khi intent `weather` | Lấy dự báo từ Open-Meteo |
+| `analyze_environment_telemetry` | Dùng khi intent `telemetry` | Phân tích nhiệt độ và độ ẩm trong Postgres |
 | `analyze_crop_data` | Dùng khi intent `analysis` | Tính sản lượng và đưa ra khuyến nghị đơn giản |
 
 ## Giới hạn cần biết
 
 - Intent routing hiện dùng heuristic keyword, chưa phải LLM tool-calling.
-- Weather node chỉ nhận diện Hà Nội và Thành phố Hồ Chí Minh bằng keyword; các
-  trường hợp khác mặc định dùng `Hanoi`.
+- Telemetry node lấy tối đa 50 mẫu nhiệt độ và độ ẩm mới nhất từ các mission
+  thuộc user hiện tại, sau đó tính giá trị mới nhất, trung bình, thấp nhất và
+  cao nhất. Đây là dữ liệu lịch sử từ database, không phải dự báo thời tiết.
 - `analyze_crop_data` chỉ trích xuất dữ liệu rất đơn giản từ câu hỏi, chưa có
-  parser mùa vụ phức tạp.
-- API hiện chỉ hỗ trợ một câu hỏi độc lập, chưa có conversation history,
-  streaming hoặc memory.
+  parser mùa vụ phức tạp. Tool không tính hoặc khuyến nghị khi thiếu diện tích
+  hay năng suất hợp lệ.
+- API lưu lịch sử hỏi đáp theo từng cuộc trò chuyện và hỗ trợ streaming câu trả
+  lời cuối qua SSE. Graph vẫn xử lý câu hỏi hiện tại độc lập, chưa đưa các lượt
+  trước vào context của LLM và chưa hỗ trợ memory.
 - Nếu một tool phụ lỗi, agent lưu lỗi vào state và vẫn cố tổng hợp bằng dữ liệu
   còn lại. Nếu Gemini lỗi, agent trả fallback từ tool results.
 
@@ -60,7 +62,6 @@ backend/src/agent/
 └── tools/
     ├── __init__.py
     ├── analysis.py
-    ├── database.py
     ├── search.py
-    └── weather.py
+    └── telemetry.py
 ```

@@ -2,6 +2,8 @@
 
 Thư mục `api/` mô tả các endpoint chính của backend.
 
+- `response-patterns.md`: contract chung cho success, collection và error.
 - `agent.md`: mô tả endpoint `POST /agent/ask`.
 - `auth.md`: đăng ký, đăng nhập, lấy user hiện tại và logout.
-- `health.md`: endpoint gốc `GET /`.
+- `dashboard.md`: dữ liệu nhiệt độ và độ ẩm cho dashboard.
+- `health.md`: health check public `GET /health`.

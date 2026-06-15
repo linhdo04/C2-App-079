@@ -13,6 +13,7 @@ class AgentState(TypedDict, total=False):
     """State cho LangGraph agent workflow."""
 
     question: str
+    user_id: int
     messages: Annotated[list[BaseMessage], add_messages]
     intents: list[AgentIntent]
     tool_results: dict[str, str]
