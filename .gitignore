@@ -22,3 +22,6 @@ build/
 checkpoints/
 .idea/
 .vscode/
+
+# Training run logs (per-epoch JSON, regenerated each run)
+logs/
