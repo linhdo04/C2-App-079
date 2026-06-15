@@ -32,7 +32,7 @@ from datetime import datetime
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import Dataset, DataLoader, random_split, WeightedRandomSampler
 import cv2
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
@@ -129,18 +129,60 @@ def get_transforms(split: str):
         ])
 
 
+# Classes that are rare enough to warrant oversampling their tiles.
+# road=1.86%, building=1.10% of pixels — both stalled with low IoU.
+RARE_CLASSES    = (1, 4)  # building, road
+RARE_TILE_BOOST = 3.0     # extra weight per rare class present in a tile
+
+
+def _compute_sample_weights(root: Path, stems: list) -> list:
+    """
+    Per-tile sampling weight = 1 + RARE_TILE_BOOST for each rare class
+    (building, road) present anywhere in that tile's mask. Tiles with
+    neither get weight 1, tiles with both get weight 1 + 2*RARE_TILE_BOOST.
+
+    Cached to disk (keyed by the exact stem list) since masks don't change
+    between runs.
+    """
+    cache_path = root / "train_sample_weights.json"
+    if cache_path.exists():
+        cached = json.loads(cache_path.read_text())
+        if cached.get("stems") == stems:
+            return cached["weights"]
+
+    mask_dir = root / "masks"
+    weights  = []
+    for stem in stems:
+        mask = cv2.imread(str(mask_dir / f"{stem}.png"), cv2.IMREAD_GRAYSCALE)
+        w = 1.0
+        for cls_id in RARE_CLASSES:
+            if (mask == cls_id).any():
+                w += RARE_TILE_BOOST
+        weights.append(w)
+
+    cache_path.write_text(json.dumps({"stems": stems, "weights": weights}))
+    return weights
+
+
 def build_dataloaders(data_dir: Path, batch_size: int):
     """
     Loads tiles from data/processed/ using train.txt and val.txt produced by preprocess.py.
     Images are .jpg, masks are .png, all in flat images/ and masks/ subdirectories.
+
+    Training tiles containing rare classes (building, road) are oversampled
+    via WeightedRandomSampler to address class imbalance.
     """
     train_ds = LandCoverDataset(data_dir, "train", get_transforms("train"))
     val_ds   = LandCoverDataset(data_dir, "val",   get_transforms("val"))
 
     print(f"       Train: {len(train_ds)} tiles | Val: {len(val_ds)} tiles")
 
+    print("       Computing sample weights for road/building oversampling...")
+    weights = _compute_sample_weights(data_dir, train_ds.stems)
+    sampler = WeightedRandomSampler(weights, num_samples=len(train_ds), replacement=True)
+
     train_loader = DataLoader(train_ds, batch_size=batch_size,
-                              shuffle=True,  num_workers=4,
+                              sampler=sampler, num_workers=4,
                               pin_memory=True, drop_last=True)
     val_loader   = DataLoader(val_ds,   batch_size=batch_size,
                               shuffle=False, num_workers=4,
@@ -172,27 +214,78 @@ def build_model(num_classes: int = NUM_CLASSES) -> nn.Module:
 # ─────────────────────────────────────────────
 # LOSS
 # ─────────────────────────────────────────────
+def _lovasz_grad(gt_sorted: torch.Tensor) -> torch.Tensor:
+    """Gradient of the Lovász extension w.r.t. sorted errors (Berman et al., 2018)."""
+    p = len(gt_sorted)
+    gts = gt_sorted.sum()
+    intersection = gts - gt_sorted.float().cumsum(0)
+    union = gts + (1 - gt_sorted).float().cumsum(0)
+    jaccard = 1.0 - intersection / union
+    if p > 1:
+        jaccard[1:p] = jaccard[1:p] - jaccard[0:-1]
+    return jaccard
+
+
+def _lovasz_softmax_flat(probs: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+    """
+    probs : (P, C) class probabilities for each pixel
+    labels: (P,) ground-truth class index for each pixel
+    """
+    C = probs.shape[1]
+    losses = []
+    for c in range(C):
+        fg = (labels == c).float()
+        if fg.sum() == 0:
+            continue
+        errors = (fg - probs[:, c]).abs()
+        errors_sorted, perm = torch.sort(errors, 0, descending=True)
+        fg_sorted = fg[perm]
+        losses.append(torch.dot(errors_sorted, _lovasz_grad(fg_sorted)))
+    if not losses:
+        return probs.sum() * 0.0
+    return torch.stack(losses).mean()
+
+
+class LovaszSoftmaxLoss(nn.Module):
+    """
+    Lovász-Softmax (Berman et al., 2018) — directly optimizes a convex
+    surrogate of per-class IoU. Helps thin/rare classes (e.g. road) that
+    pixel-averaged losses (CE/Dice/Focal) under-weight.
+    """
+    def forward(self, pred: torch.Tensor, target: torch.Tensor):
+        probs = torch.softmax(pred, dim=1)
+        B, C, H, W = probs.shape
+        probs  = probs.permute(0, 2, 3, 1).reshape(-1, C)
+        target = target.reshape(-1)
+        return _lovasz_softmax_flat(probs, target)
+
+
 class CombinedLoss(nn.Module):
     """
-    CE (weighted) + Dice + Focal.
+    CE (weighted) + Dice + Focal + Lovász-Softmax.
     - CE + class weights: explicit per-class penalty scaling
     - Dice: overlap quality for imbalanced segmentation
     - Focal (gamma=2): down-weights easy background pixels, focuses on hard road/building
+    - Lovász: directly optimizes per-class IoU, helps thin/rare classes (road)
     """
     def __init__(self, class_weights: torch.Tensor,
-                 dice_weight: float = 0.4, focal_weight: float = 0.2):
+                 dice_weight: float = 0.4, focal_weight: float = 0.2,
+                 lovasz_weight: float = 0.2):
         super().__init__()
-        self.ce_loss    = nn.CrossEntropyLoss(weight=class_weights)
-        self.dice_loss  = smp.losses.DiceLoss(mode="multiclass", smooth=1.0)
-        self.focal_loss = smp.losses.FocalLoss(mode="multiclass", gamma=2.0)
-        self.dice_weight  = dice_weight
-        self.focal_weight = focal_weight
+        self.ce_loss     = nn.CrossEntropyLoss(weight=class_weights)
+        self.dice_loss   = smp.losses.DiceLoss(mode="multiclass", smooth=1.0)
+        self.focal_loss  = smp.losses.FocalLoss(mode="multiclass", gamma=2.0)
+        self.lovasz_loss = LovaszSoftmaxLoss()
+        self.dice_weight   = dice_weight
+        self.focal_weight  = focal_weight
+        self.lovasz_weight = lovasz_weight
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor):
-        ce_weight = 1.0 - self.dice_weight - self.focal_weight
-        return (ce_weight    * self.ce_loss(pred, target)
-                + self.dice_weight  * self.dice_loss(pred, target)
-                + self.focal_weight * self.focal_loss(pred, target))
+        ce_weight = 1.0 - self.dice_weight - self.focal_weight - self.lovasz_weight
+        return (ce_weight     * self.ce_loss(pred, target)
+                + self.dice_weight   * self.dice_loss(pred, target)
+                + self.focal_weight  * self.focal_loss(pred, target)
+                + self.lovasz_weight * self.lovasz_loss(pred, target))
 
 
 # ─────────────────────────────────────────────
@@ -370,7 +463,7 @@ def main():
     # ── Loss & Optimizer ─────────────────────────────────────
     print("[3/4] Setting up loss and optimizer...")
     weights   = CLASS_WEIGHTS.to(device)
-    criterion = CombinedLoss(weights, dice_weight=0.5)
+    criterion = CombinedLoss(weights, dice_weight=0.4, focal_weight=0.2, lovasz_weight=0.2)
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
 
     # Warm restarts every T_0 epochs — periodically resets LR to escape plateaus

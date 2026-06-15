@@ -2,6 +2,29 @@
 
 ---
 
+## 2026-06-15 — Lovász-Softmax loss for road IoU, ignore training logs
+
+### Context
+Oversampling rare-class tiles (building, road) bumped val mIoU from 0.8236 →
+0.8333, but road IoU barely moved (~0.59 → ~0.62) — tile-level oversampling
+doesn't fix the per-pixel imbalance within those tiles, so pixel-averaged
+losses (CE/Dice/Focal) still under-weight road.
+
+### Changes made
+- **`Kiên Trung/Segmentation models training codes/train.py`**:
+  - Added `LovaszSoftmaxLoss` — Lovász-Softmax (Berman et al., 2018), a
+    convex surrogate that directly optimizes per-class IoU. Known to help
+    thin/rare classes (roads) more than pixel-averaged losses.
+  - `CombinedLoss` now mixes CE (weighted) + Dice + Focal + Lovász, with
+    weights 0.2 / 0.4 / 0.2 / 0.2 respectively.
+- **`.gitignore`**: added `logs/` — per-run training JSON logs are
+  regenerated each run and don't need to be tracked.
+
+### Status
+- Model checkpoint: `checkpoints/best_model.pth` — ResNet34, epoch 29, val mIoU **0.8333**
+- Next: run training with the new loss and check whether road IoU improves
+  beyond ~0.62.
+
 ## 2026-06-11 — A* transit routing (RCPP + BECD), multi-region RCPP coverage, enriched waypoint/mission JSON
 
 ### What was reviewed
