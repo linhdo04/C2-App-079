@@ -1,0 +1,14 @@
+node_modules
+.next
+.git
+*.md
+.env*
+.vscode
+.dockerignore
+.gitignore
+.prettierignore
+.prettierrc
+Dockerfile
+eslint.config.mjs
+next-env.d.ts
+README.md

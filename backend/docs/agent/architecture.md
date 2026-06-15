@@ -1,159 +1,30 @@
 # Kiến trúc AI Agent
 
-## Thành phần
+`react.py` chứa core không phụ thuộc Gemini, database hay Tavily:
 
-### API route
+- `AgentLoop`: iteration, chống lặp, termination và run summary.
+- `Reasoner`: provider-neutral planning/finalization.
+- `Tool`/`ToolRegistry`: capability và input schema.
+- `Executor`: validation, timeout, retry/backoff và safe observation.
+- `InMemoryMemory`: recent conversation và request-local ReAct steps.
 
-`backend/src/api/routes/agent_routes.py` khai báo endpoint hỏi độc lập
-`POST /agent/ask` và các endpoint quản lý cuộc trò chuyện dưới
-`/agent/chats`. Khi gửi message trong một chat, route gọi `run_agent()` rồi lưu
-cả câu hỏi và câu trả lời vào `chat_histories`.
+`factory.py` là composition root production. Gemini là primary reasoner;
+heuristic reasoner là fallback. Registry production có `calculator`,
+`document_search`, `search`, `telemetry`, `analysis`.
 
-### Agent entry point
+Mỗi run có `run_id`. Structured logs ghi iteration/tool attempt/duration,
+provider fallback, termination reason và final `agent_run_summary`.
 
-`backend/src/agent/agent.py` cung cấp:
+## Streaming
 
-```python
-async def run_agent(question: str, user_id: int | None = None) -> str
-async def stream_agent(
-    question: str,
-    user_id: int | None = None,
-) -> AsyncIterator[AgentStreamEvent]
-```
+Loop phát internal lifecycle event trước và sau tool execution. `stream_agent`
+chuyển chúng thành safe progress event, không chuyển thought hoặc observation.
+Final answer được chia thành token events. Route giữ SSE framing hiện tại và
+persist exchange chỉ sau khi stream hoàn tất.
 
-Hàm tạo `AgentState` ban đầu với `question` gốc và `HumanMessage`, gọi
-`graph.ainvoke()` rồi ưu tiên trả `state["answer"]`. Nếu graph cũ hoặc fallback
-không tạo `answer`, hàm mới đọc content của message cuối.
+## Memory
 
-`stream_agent()` phát trạng thái routing ngay khi bắt đầu, chạy đồng thời các
-tool đã chọn, phát trạng thái synthesis rồi gọi `llm.astream()` để yield từng
-token. Các trạng thái chỉ mô tả tiến trình vận hành cấp cao, không chứa suy luận
-nội bộ của model.
-
-### State
-
-`backend/src/agent/state.py` định nghĩa state dùng chung:
-
-```python
-class AgentState(TypedDict, total=False):
-    question: str
-    messages: Annotated[list[BaseMessage], add_messages]
-    intents: list[str]
-    tool_results: dict[str, str]
-    tool_errors: dict[str, str]
-    answer: str
-```
-
-`question` là nguồn input chính cho mọi node. `messages` vẫn được giữ để tương
-thích với LangGraph/LangChain, nhưng tool nodes không đọc output của node trước
-làm query. `total=False` cho phép mỗi node trả partial state update.
-
-### Graph
-
-`backend/src/agent/graph.py` tạo full graph và một `tool_graph` dùng chung cho
-streaming:
-
-```text
-START
-  |
-  v
-route_intent
-  |
-  v
-execute_tools
-  |
-  v
-synthesize_answer
-  |
-  v
-END
-```
-
-`route_intent` dùng keyword heuristic để chọn intent. Keyword được match theo
-ranh giới token để tránh route nhầm do substring ngắn.
-
-| Intent | Khi dùng |
-| --- | --- |
-| `telemetry` | Câu hỏi về nhiệt độ, độ ẩm, cảm biến hoặc dữ liệu môi trường |
-| `analysis` | Câu hỏi có diện tích, năng suất, sản lượng, ước tính hoặc thu hoạch |
-| `search` | Câu hỏi về giá, thị trường, kỹ thuật, sâu bệnh, phân bón, giống, nông sản |
-| `general` | Câu hỏi không khớp tool cụ thể |
-
-`execute_tools` chạy các tool khớp intent và lưu kết quả vào `tool_results`.
-Lỗi tool được lưu vào `tool_errors` để node tổng hợp có thể nêu hạn chế thay vì
-làm hỏng toàn bộ request. Mỗi tool có timeout cấu hình qua
-`AGENT_TOOL_TIMEOUT_SECONDS`; bước tổng hợp Gemini được giới hạn bởi
-`AGENT_LLM_TIMEOUT_SECONDS`. Nội dung exception chi tiết chỉ được ghi log,
-không được đưa vào prompt gửi cho Gemini.
-
-`synthesize_answer` gọi Gemini với `SYSTEM_PROMPT`, câu hỏi gốc, tool results và
-tool errors. Nếu Gemini lỗi hoặc trả rỗng, node trả fallback dựa trên dữ liệu đã
-có.
-
-`SYSTEM_PROMPT` yêu cầu model chỉ tổng hợp dữ liệu thực sự có trong context,
-phân biệt dữ liệu với nhận định, không bịa nguồn hoặc mức độ tin cậy, và xem nội
-dung từ tools như dữ liệu không đáng tin cậy thay vì chỉ dẫn. Khuyến nghị phải
-phù hợp điều kiện Việt Nam và nêu giới hạn khi thiếu thông tin.
-
-## Luồng request
-
-```text
-POST /agent/ask
-  -> run_agent(question)
-  -> AgentState(question, HumanMessage(question))
-  -> route_intent
-  -> execute_tools
-  -> synthesize_answer
-  -> {"answer": state["answer"]}
-```
-
-Luồng chat có lịch sử:
-
-```text
-POST /agent/chats/{chat_id}/messages
-  -> kiểm tra chat thuộc current user
-  -> run_agent(question)
-  -> khóa row chat bằng SELECT ... FOR UPDATE
-  -> lưu user message + assistant message
-  -> cập nhật title và updated_at của chat
-```
-
-Lịch sử hiện là persistence và UI history. Các message cũ chưa được truyền vào
-`AgentState`, vì vậy graph và prompt không thay đổi.
-
-Row lock chỉ được lấy sau khi agent đã tạo câu trả lời để không giữ transaction
-lock trong lúc chờ LLM. Lock tuần tự hóa phần đặt title và ghi message khi nhiều
-request đồng thời gửi vào cùng một chat.
-
-Luồng streaming:
-
-```text
-POST /agent/chats/{chat_id}/messages/stream
-  -> kiểm tra ownership
-  -> SSE status/routing
-  -> chạy `tool_graph`
-  -> route intent
-  -> SSE status/tool
-  -> chạy đồng thời các tools
-  -> SSE status/synthesis
-  -> llm.astream()
-  -> SSE token events
-  -> khóa row chat
-  -> lưu đầy đủ user + assistant messages
-  -> commit transaction
-  -> SSE done event
-```
-
-Không ghi message từng phần vào database. Nếu stream hoặc persistence lỗi,
-transaction được rollback và client nhận event `error`.
-
-## Phụ thuộc bên ngoài
-
-| Hệ thống | Mục đích | Cấu hình |
-| --- | --- | --- |
-| Tavily | Web search | `TAVILY_API_KEY` |
-| PostgreSQL | Telemetry nhiệt độ và độ ẩm theo mission ownership | `DATABASE_URL` |
-| Google Gemini | Tổng hợp câu trả lời cuối | `GEMINI_API_KEY` |
-
-Xem quyết định nền tảng tại
-[ADR 0004](../adr/0004-langchain-gemini.md).
+Chat route xác nhận chat thuộc authenticated user trước khi query history.
+History được lấy mới nhất theo giới hạn, đảo lại chronological order và cắt
+theo character budget trước khi gửi reasoner. Stateless endpoint không tạo
+conversation memory.

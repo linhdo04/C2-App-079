@@ -4,7 +4,7 @@ import { readSession, saveSession } from "@/lib/auth-client";
 import type { ApiResponse } from "@/types/api";
 import type { StoredSession, TokenResponse } from "@/types/auth";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/$/, "") ?? "http://localhost:8000";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL;
 
 type ApiErrorBody = {
   detail?: string;

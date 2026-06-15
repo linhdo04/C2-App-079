@@ -70,14 +70,14 @@ async def test_cors_preflight_allows_configured_frontend() -> None:
         response = await client.options(
             f"{settings.api_prefix}/auth/login",
             headers={
-                "Origin": "http://localhost:3000",
+                "Origin": "http://127.0.0.1:3000",
                 "Access-Control-Request-Method": "POST",
                 "Access-Control-Request-Headers": "content-type",
             },
         )
 
     assert response.status_code == 200
-    assert response.headers["access-control-allow-origin"] == ("http://localhost:3000")
+    assert response.headers["access-control-allow-origin"] == ("http://127.0.0.1:3000")
     assert response.headers["access-control-allow-credentials"] == "true"
     assert "POST" in response.headers["access-control-allow-methods"]
 
@@ -91,7 +91,7 @@ async def test_cors_preflight_rejects_unconfigured_frontend() -> None:
         response = await client.options(
             f"{settings.api_prefix}/auth/login",
             headers={
-                "Origin": "http://localhost:3030",
+                "Origin": "http://127.0.0.1:3030",
                 "Access-Control-Request-Method": "POST",
             },
         )
@@ -102,11 +102,11 @@ async def test_cors_preflight_rejects_unconfigured_frontend() -> None:
 
 def test_frontend_origins_support_multiple_values_and_trailing_slashes() -> None:
     settings = Settings(
-        FRONTEND_ORIGIN=("http://localhost:3000/, https://app.example.com/ ")
+        FRONTEND_ORIGIN=("http://127.0.0.1:3000/, https://app.example.com/ ")
     )  # type: ignore[call-arg]
 
     assert settings.frontend_origins == [
-        "http://localhost:3000",
+        "http://127.0.0.1:3000",
         "https://app.example.com",
     ]
 

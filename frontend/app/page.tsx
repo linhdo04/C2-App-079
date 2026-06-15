@@ -1,8 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ArrowRight, Bot, CloudSun, Radar, ShieldCheck } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { GuestLoginButton, Nav } from "@/components/ui/pages/home";
+import { Bot, CloudSun, Radar, ShieldCheck } from "lucide-react";
+import { GuestLoginButton, Nav } from "@/components/pages/home";
 
 export const metadata: Metadata = {
   title: "AeroField",
@@ -35,7 +34,7 @@ export default function Home() {
               <span className="eyebrow">AI-powered field operations</span>
             </div>
             <h1 className="text-balance max-w-4xl text-5xl font-bold leading-[0.98] tracking-[-0.055em] sm:text-6xl lg:text-7xl">
-              Quan sát cánh đồng.
+              Quan sát cánh đồnggggggggg.
               <span className="block text-primary">Ra quyết định nhanh hơn.</span>
             </h1>
             <p className="mt-7 max-w-xl text-base leading-7 text-muted-foreground sm:text-lg">
@@ -43,15 +42,6 @@ export default function Home() {
               chính xác.
             </p>
             <div className="mt-9 flex flex-col gap-3 sm:flex-row">
-              <Button
-                asChild
-                size="lg"
-              >
-                <Link href="/agent">
-                  Mở trung tâm điều phối
-                  <ArrowRight />
-                </Link>
-              </Button>
               <GuestLoginButton />
             </div>
 

@@ -1,60 +1,56 @@
-"""Analysis tool for agricultural data."""
+"""Crop analysis production tool."""
 
-from typing import Any, cast
+import re
 
-from langchain_core.tools import tool
+from pydantic import BaseModel, Field
+
+from ..react import Tool, ToolContext
 
 
-@tool
-async def analyze_crop_data(data: dict[str, Any]) -> str:
-    """Phân tích dữ liệu mùa vụ và đưa ra khuyến nghị.
+class AnalysisInput(BaseModel):
+    crop_name: str = "không xác định"
+    area: float | None = Field(default=None, gt=0)
+    yield_per_ha: float | None = Field(default=None, gt=0)
+    season: str = "không xác định"
 
-    Args:
-        data: Dictionary chứa thông tin về:
-            - crop_name: Tên cây trồng
-            - area: Diện tích (ha)
-            - yield_per_ha: Năng suất (tấn/ha)
-            - season: Vụ (xuân/hè/thu/đông)
 
-    Returns:
-        Chuỗi phân tích và khuyến nghị
-    """
-    crop = data.get("crop_name", "không xác định")
-    area = data.get("area")
-    yield_val = data.get("yield_per_ha")
-    season = data.get("season", "không xác định")
+class AnalysisTool(Tool):
+    name = "analysis"
+    description = "Estimate crop production from crop, area, yield, and season."
+    input_model = AnalysisInput
 
-    missing_fields: list[str] = []
-    if not isinstance(area, (int, float)) or isinstance(area, bool) or area <= 0:
-        missing_fields.append("diện tích hợp lệ (ha)")
-    if (
-        not isinstance(yield_val, (int, float))
-        or isinstance(yield_val, bool)
-        or yield_val <= 0
-    ):
-        missing_fields.append("năng suất hợp lệ (tấn/ha)")
-    if missing_fields:
-        return "Chưa đủ dữ liệu để phân tích: cần " + " và ".join(missing_fields) + "."
+    async def execute(self, tool_input: BaseModel, context: ToolContext) -> str:
+        data = AnalysisInput.model_validate(tool_input)
+        if data.area is None or data.yield_per_ha is None:
+            return "Chưa đủ dữ liệu: cần diện tích và năng suất hợp lệ."
+        total = data.area * data.yield_per_ha
+        return (
+            f"Cây trồng: {data.crop_name}; vụ: {data.season}; "
+            f"diện tích: {data.area} ha; năng suất: {data.yield_per_ha} tấn/ha; "
+            f"tổng sản lượng ước tính: {total} tấn."
+        )
 
-    valid_area = float(cast(int | float, area))
-    valid_yield = float(cast(int | float, yield_val))
-    total = valid_area * valid_yield
 
-    analysis = f"""Phân tích dữ liệu canh tác:
-- Cây trồng: {crop}
-- Vụ: {season}
-- Diện tích: {valid_area} ha
-- Năng suất: {valid_yield} tấn/ha
-- Tổng sản lượng ước tính: {total} tấn
-
-Khuyến nghị:
-- {
-        "Năng suất cao, tiếp tục duy trì phương pháp canh tác"
-        if valid_yield > 5
-        else "Năng suất thấp, cần cải thiện kỹ thuật"
+def extract_crop_input(question: str) -> dict[str, object]:
+    normalized = " ".join(question.lower().replace(",", ".").split())
+    area_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:ha|hecta(?:re)?)\b", normalized)
+    yield_match = re.search(
+        r"(\d+(?:\.\d+)?)\s*(?:tấn/ha|tan/ha|tấn trên ha)", normalized
+    )
+    crop = next(
+        (
+            name
+            for name in ("lúa", "cà phê", "tiêu", "ngô", "sắn", "cao su")
+            if name in normalized
+        ),
+        "không xác định",
+    )
+    return {
+        "crop_name": crop,
+        "area": float(area_match.group(1)) if area_match else None,
+        "yield_per_ha": float(yield_match.group(1)) if yield_match else None,
+        "season": "không xác định",
     }
-"""
-    return analysis
 
 
-__all__ = ["analyze_crop_data"]
+__all__ = ["AnalysisInput", "AnalysisTool", "extract_crop_input"]

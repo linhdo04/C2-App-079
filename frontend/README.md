@@ -5,8 +5,8 @@ Next.js 16 frontend for authentication and the agricultural AI Agent workspace.
 ## Development
 
 ```bash
-bun install
-bun run dev
+npm install
+npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
@@ -45,7 +45,7 @@ import { Input } from "@/components/ui/input";
 Add another shadcn component from the `frontend` directory:
 
 ```bash
-bunx shadcn@latest add <component>
+npmx shadcn@latest add <component>
 ```
 
 Review generated styles against the existing agricultural theme before using the component.
@@ -53,8 +53,8 @@ Review generated styles against the existing agricultural theme before using the
 ## Verification
 
 ```bash
-bun run lint:check
-bun run format:fix
-bun run format:check
-bun run build
+npm run lint:check
+npm run format:fix
+npm run format:check
+npm run build
 ```
