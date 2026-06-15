@@ -15,16 +15,9 @@ function Nav() {
     >
       {authStatus === "authenticated" ? (
         <>
-          <Button
-            asChild
-            variant="ghost"
-            className="hidden sm:inline-flex"
-          >
-            <Link href="/dashboard">Dashboard</Link>
-          </Button>
           <Button asChild>
-            <Link href="/agent">
-              AI Agent
+            <Link href="/dashboard">
+              Dashboard
               <ArrowRight />
             </Link>
           </Button>
@@ -60,7 +53,7 @@ function GuestLoginButton() {
           asChild
           size="lg"
         >
-          <Link href="/agent">
+          <Link href="/dashboard">
             Mở trung tâm điều phối
             <ArrowRight />
           </Link>

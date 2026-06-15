@@ -107,6 +107,65 @@
   .text-balance {
     text-wrap: balance;
   }
+
+  .agent-chat-widget {
+    right: 1.5rem;
+    bottom: 1.5rem;
+    display: flex;
+    width: min(420px, calc(100dvw - 3rem));
+    height: min(640px, calc(100dvh - 3rem));
+    min-width: 360px;
+    min-height: 480px;
+    max-width: calc(100dvw - 3rem);
+    max-height: calc(100dvh - 3rem);
+    resize: both;
+    border-radius: 1.5rem;
+    flex-direction: column;
+    transition:
+      opacity 160ms ease,
+      visibility 160ms ease,
+      width 180ms ease,
+      height 180ms ease;
+  }
+
+  .agent-chat-widget-expanded {
+    width: min(760px, calc(100dvw - 3rem));
+    height: min(820px, calc(100dvh - 3rem));
+    resize: none;
+  }
+}
+
+@media (max-width: 639px) {
+  html.agent-chat-mobile-open,
+  html.agent-chat-mobile-open body {
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  .agent-chat-widget,
+  .agent-chat-widget-expanded {
+    inset: 0;
+    width: 100dvw;
+    height: 100dvh;
+    min-width: 0;
+    min-height: 0;
+    max-width: none;
+    max-height: none;
+    resize: none;
+    border: 0;
+    border-radius: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .agent-chat-widget,
+  .agent-chat-widget-expanded {
+    transition-duration: 0.01ms;
+  }
 }
 
 @media (prefers-reduced-motion: no-preference) {

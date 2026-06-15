@@ -14,17 +14,10 @@ type AgentQuestionPanelProps = {
   isLoading: boolean;
   messages: ChatMessage[];
   streamingStatus?: string;
-  title: string | null;
   onSubmit: (values: AgentQuestionFormValues) => Promise<boolean>;
 };
 
-export function AgentQuestionPanel({
-  isLoading,
-  messages,
-  streamingStatus = "",
-  title,
-  onSubmit,
-}: AgentQuestionPanelProps) {
+export function AgentQuestionPanel({ isLoading, messages, streamingStatus = "", onSubmit }: AgentQuestionPanelProps) {
   const {
     formState: { errors },
     handleSubmit,
@@ -72,23 +65,16 @@ export function AgentQuestionPanel({
 
   return (
     <section className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-background/55">
-      <header className="flex h-14 shrink-0 items-center border-b border-border/70 bg-background/70 pr-4 pl-14 backdrop-blur-xl sm:pr-6 lg:px-6">
-        <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-4">
-          <h1 className="min-w-0 truncate text-sm font-bold text-foreground">{title ?? "Cuộc trò chuyện mới"}</h1>
-          <span className="eyebrow hidden text-muted-foreground sm:block">Agricultural intelligence</span>
-        </div>
-      </header>
-
       <div
         ref={conversationRef}
-        className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+        className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain"
         aria-live="polite"
       >
         {messages.length === 0 && !isLoading ? (
           <EmptyConversation onSelect={(text) => setValue("question", text, { shouldValidate: true })} />
         ) : (
-          <div className="mx-auto w-full max-w-3xl px-4 pt-8 pb-44 sm:px-6 sm:pt-10">
-            <div className="space-y-8 sm:space-y-10">
+          <div className="mx-auto w-full max-w-3xl px-4 pt-5 pb-36">
+            <div className="space-y-6">
               {messages.map((message) => (
                 <MessageRow
                   key={message.id}
@@ -102,7 +88,7 @@ export function AgentQuestionPanel({
         )}
       </div>
 
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-background via-background/95 to-transparent px-3 pt-12 pb-3 sm:px-6 sm:pb-5">
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-background via-background/95 to-transparent px-3 pt-10 pb-3">
         <form
           className="pointer-events-auto mx-auto w-full max-w-3xl"
           onSubmit={handleSubmit(submit)}
@@ -124,7 +110,7 @@ export function AgentQuestionPanel({
               key={composerVersion}
               id="question"
               {...questionField}
-              className="block max-h-48 min-h-14 w-full resize-none bg-transparent px-5 pt-4 pr-16 pb-3 text-base leading-6 text-foreground outline-none placeholder:text-muted-foreground/75 disabled:cursor-not-allowed disabled:opacity-60"
+              className="block max-h-36 min-h-12 w-full resize-none bg-transparent px-4 pt-3 pr-14 pb-2.5 text-sm leading-6 text-foreground outline-none placeholder:text-muted-foreground/75 disabled:cursor-not-allowed disabled:opacity-60"
               placeholder="Nhắn tin cho AeroField"
               rows={1}
               aria-invalid={errors.question !== undefined}
@@ -134,7 +120,7 @@ export function AgentQuestionPanel({
               onKeyDown={handleComposerKeyDown}
             />
             <button
-              className="absolute right-2 bottom-2 grid size-10 place-items-center rounded-full bg-primary text-primary-foreground shadow-[0_8px_24px_rgb(185_243_74/0.18)] transition hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none disabled:bg-secondary disabled:text-muted-foreground disabled:shadow-none"
+              className="absolute right-1.5 bottom-1.5 grid size-10 place-items-center rounded-full bg-primary text-primary-foreground shadow-[0_8px_24px_rgb(185_243_74/0.18)] transition hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none disabled:bg-secondary disabled:text-muted-foreground disabled:shadow-none"
               type="submit"
               disabled={isLoading}
               aria-label={isLoading ? "Đang tạo câu trả lời" : "Gửi tin nhắn"}
@@ -170,7 +156,7 @@ function MessageRow({ message }: { message: ChatMessage }) {
   if (isUser) {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[88%] rounded-3xl border border-primary/15 bg-primary/10 px-5 py-3 text-[15px] leading-7 text-foreground sm:max-w-[78%]">
+        <div className="max-w-[88%] rounded-2xl border border-primary/15 bg-primary/10 px-4 py-2.5 text-sm leading-6 text-foreground">
           <p className="whitespace-pre-wrap">{message.message}</p>
         </div>
       </div>
@@ -178,13 +164,13 @@ function MessageRow({ message }: { message: ChatMessage }) {
   }
 
   return (
-    <article className="group flex items-start gap-3 sm:gap-4">
+    <article className="group flex items-start gap-3">
       <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground shadow-[0_8px_24px_rgb(185_243_74/0.12)]">
         <Leaf className="size-4" />
       </span>
       <div className="min-w-0 flex-1">
         <p className="mb-2 text-sm font-bold text-foreground">AeroField</p>
-        <div className="whitespace-pre-wrap text-[15px] leading-7 text-secondary-foreground">{message.message}</div>
+        <div className="whitespace-pre-wrap text-sm leading-6 text-secondary-foreground">{message.message}</div>
       </div>
     </article>
   );
@@ -192,7 +178,7 @@ function MessageRow({ message }: { message: ChatMessage }) {
 
 function StreamingStatus({ message }: { message: string }) {
   return (
-    <div className="flex items-start gap-3 sm:gap-4">
+    <div className="flex items-start gap-3">
       <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground shadow-[0_8px_24px_rgb(185_243_74/0.12)]">
         <Leaf className="size-4" />
       </span>
@@ -213,7 +199,7 @@ function StreamingStatus({ message }: { message: string }) {
 
 function EmptyConversation({ onSelect }: { onSelect: (text: string) => void }) {
   return (
-    <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center px-4 pt-12 pb-40 sm:px-6">
+    <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center px-4 pt-8 pb-32">
       <div className="mx-auto w-full">
         <div className="flex items-center justify-center gap-3">
           <span className="grid size-11 place-items-center rounded-xl bg-primary text-primary-foreground shadow-[0_12px_36px_rgb(185_243_74/0.16)]">
@@ -221,15 +207,15 @@ function EmptyConversation({ onSelect }: { onSelect: (text: string) => void }) {
           </span>
           <Sparkles className="size-5 text-primary/45" />
         </div>
-        <p className="eyebrow mt-7 text-center text-primary">AI field assistant</p>
-        <h2 className="mt-3 text-center text-2xl font-bold tracking-[-0.035em] text-foreground sm:text-3xl">
+        <p className="eyebrow mt-5 text-center text-primary">AI field assistant</p>
+        <h2 className="mt-2 text-center text-xl font-bold tracking-[-0.035em] text-foreground">
           Hôm nay tôi có thể giúp gì?
         </h2>
-        <p className="mx-auto mt-3 max-w-lg text-center text-sm leading-6 text-muted-foreground">
+        <p className="mx-auto mt-2 max-w-sm text-center text-xs leading-5 text-muted-foreground">
           Hỏi về thời tiết, mùa vụ, kỹ thuật canh tác hoặc dữ liệu vận hành nông nghiệp.
         </p>
 
-        <div className="mt-8 grid gap-3 sm:grid-cols-2">
+        <div className="mt-5 grid grid-cols-2 gap-2">
           <Suggestion
             icon={CloudSun}
             title="Kiểm tra thời tiết"
@@ -270,7 +256,7 @@ type SuggestionProps = {
 function Suggestion({ icon: Icon, onSelect, text, title }: SuggestionProps) {
   return (
     <button
-      className="group min-h-24 rounded-2xl border border-border/70 bg-card/55 p-4 text-left transition hover:border-primary/30 hover:bg-secondary/70 focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none"
+      className="group min-h-24 rounded-xl border border-border/70 bg-card/55 p-3 text-left transition hover:border-primary/30 hover:bg-secondary/70 focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none"
       type="button"
       onClick={() => onSelect(text)}
     >

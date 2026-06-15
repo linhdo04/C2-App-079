@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
+import { AgentChatWidget } from "@/components/features/agent/agent-chat-widget";
 import { EnvironmentDashboard } from "@/components/features/dashboard/environment-dashboard";
 
 export const metadata: Metadata = {
@@ -7,5 +9,12 @@ export const metadata: Metadata = {
 };
 
 export default function DashboardPage() {
-  return <EnvironmentDashboard />;
+  return (
+    <>
+      <EnvironmentDashboard />
+      <Suspense>
+        <AgentChatWidget />
+      </Suspense>
+    </>
+  );
 }

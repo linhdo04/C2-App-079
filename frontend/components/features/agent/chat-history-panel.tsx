@@ -1,19 +1,13 @@
-"use client";
-
-import { LogOut, Menu, MessageSquare, PanelLeftClose, Plus, Radar, Search, Trash2 } from "lucide-react";
+import { MessageSquare, Plus, Search, Trash2 } from "lucide-react";
+import { useEffect, useRef } from "react";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import type { ChatSession } from "@/types/agent";
-import { useAuthStore } from "@/lib/auth-store";
-import { PublicRouter } from "@/enums/public-routers";
-import { useLogoutMutation } from "@/lib/api-hooks";
-import { useRouter } from "next/navigation";
-import { toast } from "sonner";
-import { useQueryClient } from "@tanstack/react-query";
 
 type ChatHistoryPanelProps = {
   activeChatId: number | null;
   chats: ChatSession[];
+  disabled: boolean;
   hasMore: boolean;
   isDeleting: boolean;
   isLoading: boolean;
@@ -24,7 +18,6 @@ type ChatHistoryPanelProps = {
   onDelete: (chatId: number) => void;
   onLoadMore: () => void;
   onNewChat: () => void;
-  onOpen: () => void;
   onSearchChange: (value: string) => void;
   onSelect: (chatId: number) => void;
 };
@@ -32,6 +25,7 @@ type ChatHistoryPanelProps = {
 export function ChatHistoryPanel({
   activeChatId,
   chats,
+  disabled,
   hasMore,
   isDeleting,
   isLoading,
@@ -42,42 +36,24 @@ export function ChatHistoryPanel({
   onDelete,
   onLoadMore,
   onNewChat,
-  onOpen,
   onSearchChange,
   onSelect,
 }: ChatHistoryPanelProps) {
-  const router = useRouter();
-  const clearAuth = useAuthStore((state) => state.clearAuth);
-  const user = useAuthStore((state) => state.user);
-  const logoutMutation = useLogoutMutation();
-  const queryClient = useQueryClient();
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
 
-  async function handleLogout() {
-    try {
-      await logoutMutation.mutateAsync();
-      queryClient.removeQueries({ queryKey: ["auth"] });
-      clearAuth();
-      router.replace(PublicRouter.Home);
-      toast.success("Bạn đã đăng xuất thành công.");
-    } catch {
-      toast.error("Cố lỗi xảy ra, vui lòng thử lại sau.");
+  useEffect(() => {
+    if (!isOpen) {
+      return;
     }
-  }
+    const frame = window.requestAnimationFrame(() => closeButtonRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [isOpen]);
 
   return (
     <>
-      <button
-        className="fixed top-2.5 left-2.5 z-20 grid size-9 place-items-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none lg:hidden"
-        type="button"
-        aria-label="Mở lịch sử trò chuyện"
-        onClick={onOpen}
-      >
-        <Menu className="size-5" />
-      </button>
-
       {isOpen && (
         <button
-          className="fixed inset-0 z-30 bg-black/55 backdrop-blur-[2px] lg:hidden"
+          className="absolute inset-0 z-20 bg-black/55 backdrop-blur-[2px]"
           type="button"
           aria-label="Đóng lịch sử trò chuyện"
           onClick={onClose}
@@ -86,35 +62,16 @@ export function ChatHistoryPanel({
 
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-40 flex w-[min(86vw,280px)] flex-col border-r border-border bg-card/95 p-2 text-foreground shadow-2xl backdrop-blur-xl transition-transform duration-200 lg:static lg:z-auto lg:w-[260px] lg:shrink-0 lg:translate-x-0 lg:shadow-none",
+          "absolute inset-y-0 left-0 z-30 flex w-[min(86%,280px)] flex-col border-r border-border bg-card/98 p-2 text-foreground shadow-2xl backdrop-blur-xl transition-transform duration-200",
           isOpen ? "translate-x-0" : "-translate-x-full",
         )}
         aria-label="Lịch sử trò chuyện"
+        aria-hidden={!isOpen}
       >
-        <div className="flex h-12 items-center justify-between px-2">
-          <button
-            className="flex min-h-11 items-center gap-2 rounded-lg px-2 text-left hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none"
-            type="button"
-            onClick={onNewChat}
-          >
-            <span className="grid size-8 place-items-center rounded-xl bg-primary text-primary-foreground">
-              <Radar className="size-4" />
-            </span>
-            <span className="text-sm font-semibold">AeroField</span>
-          </button>
-          <button
-            className="grid size-11 place-items-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none lg:hidden"
-            type="button"
-            aria-label="Đóng thanh bên"
-            onClick={onClose}
-          >
-            <PanelLeftClose className="size-5" />
-          </button>
-        </div>
-
         <button
           className="mt-1 flex min-h-11 w-full items-center gap-3 rounded-lg px-3 text-sm font-bold hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none"
           type="button"
+          disabled={disabled}
           onClick={onNewChat}
         >
           <Plus className="size-4" />
@@ -125,17 +82,18 @@ export function ChatHistoryPanel({
           <span className="sr-only">Tìm kiếm cuộc trò chuyện</span>
           <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            className="min-h-10 border-transparent bg-transparent pl-9 text-sm text-foreground hover:bg-secondary/60 focus-visible:border-border focus-visible:bg-background/60 focus-visible:ring-0"
+            className="min-h-11 border-transparent bg-transparent pl-9 text-sm text-foreground hover:bg-secondary/60 focus-visible:border-border focus-visible:bg-background/60 focus-visible:ring-0"
             type="search"
             value={search}
             placeholder="Tìm kiếm đoạn chat"
+            disabled={disabled}
             onChange={(event) => onSearchChange(event.target.value)}
           />
         </label>
 
         <p className="eyebrow mt-5 px-3 text-muted-foreground">Đoạn chat</p>
 
-        <div className="mt-2 min-h-0 flex-1 space-y-0.5 overflow-y-auto">
+        <div className="mt-2 min-h-0 flex-1 touch-pan-y space-y-0.5 overflow-y-auto overscroll-contain">
           {isLoading ? (
             <p className="px-3 py-6 text-center text-xs text-muted-foreground">Đang tải lịch sử...</p>
           ) : chats.length === 0 ? (
@@ -158,14 +116,15 @@ export function ChatHistoryPanel({
                   <button
                     className="min-w-0 flex-1 px-3 py-2.5 text-left"
                     type="button"
+                    disabled={disabled}
                     onClick={() => onSelect(chat.id)}
                   >
                     <span className="block truncate text-sm text-secondary-foreground">{chat.title}</span>
                   </button>
                   <button
-                    className="mr-1 grid size-9 shrink-0 place-items-center rounded-lg text-muted-foreground opacity-100 hover:bg-destructive-muted hover:text-destructive-text focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none lg:opacity-0 lg:group-hover:opacity-100"
+                    className="mr-1 grid size-11 shrink-0 place-items-center rounded-lg text-muted-foreground opacity-100 hover:bg-destructive-muted hover:text-destructive-text focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none lg:opacity-0 lg:group-hover:opacity-100"
                     type="button"
-                    disabled={isDeleting}
+                    disabled={disabled || isDeleting}
                     aria-label={`Xoá ${chat.title}`}
                     onClick={() => onDelete(chat.id)}
                   >
@@ -177,7 +136,7 @@ export function ChatHistoryPanel({
                 <button
                   className="mt-2 min-h-11 w-full rounded-lg px-3 text-xs font-bold text-muted-foreground hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none disabled:opacity-50"
                   type="button"
-                  disabled={isLoadingMore}
+                  disabled={disabled || isLoadingMore}
                   onClick={onLoadMore}
                 >
                   {isLoadingMore ? "Đang tải thêm..." : "Tải thêm"}
@@ -185,26 +144,6 @@ export function ChatHistoryPanel({
               )}
             </>
           )}
-        </div>
-
-        <div className="border-t border-border pt-2">
-          <div className="group flex min-h-14 items-center gap-3 rounded-lg px-2 hover:bg-secondary/65">
-            <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-secondary text-sm font-bold text-primary">
-              {user && user.name.trim().charAt(0).toUpperCase()}
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-bold text-foreground">{user && user.name}</p>
-              <p className="truncate text-xs text-muted-foreground">{user && user.email}</p>
-            </div>
-            <button
-              className="grid size-10 place-items-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none"
-              type="button"
-              aria-label="Đăng xuất"
-              onClick={handleLogout}
-            >
-              <LogOut className="size-4" />
-            </button>
-          </div>
         </div>
       </aside>
     </>
