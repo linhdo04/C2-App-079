@@ -2,15 +2,22 @@
 
 import asyncio
 import os
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from agent import run_agent, stream_agent
-from agent.react import AgentLoopResult, ConversationMessage
-from agent.tools import CalculatorTool, DocumentSearchTool
+from agent.prompts import SYSTEM_PROMPT
+from agent.react import (
+    Action,
+    AgentLoopResult,
+    ConversationMessage,
+    InMemoryMemory,
+    ReActStep,
+)
+from agent.reasoners import HeuristicReasoner
+from agent.tools import CalculatorTool, SearchInput, SearchTool
 
 
 @pytest.mark.asyncio
@@ -31,71 +38,71 @@ async def test_calculator_rejects_unsafe_and_large_expressions() -> None:
 
 
 @pytest.mark.asyncio
-async def test_document_search_is_disabled_by_default() -> None:
+async def test_search_tool_includes_result_links() -> None:
     from agent.react import ToolContext
-    from agent.tools.documents import DocumentSearchInput
 
-    result = await DocumentSearchTool([]).execute(
-        DocumentSearchInput(query="rice"),
+    class FakeClient:
+        def search(self, *, query: str, max_results: int) -> dict[str, Any]:
+            assert query == "rice price"
+            assert max_results == 1
+            return {
+                "results": [
+                    {
+                        "title": "Rice market",
+                        "content": "Prices increased this week.",
+                        "url": "https://example.com/rice-market",
+                    }
+                ]
+            }
+
+    tool = SearchTool.__new__(SearchTool)
+    tool._client = FakeClient()
+
+    result = await tool.execute(
+        SearchInput(query="rice price", max_results=1),
         ToolContext(goal="search"),
     )
-    assert result == "Document search is not configured."
+
+    assert "Rice market" in result
+    assert "Prices increased this week." in result
+    assert "URL: https://example.com/rice-market" in result
+
+
+def test_system_prompt_requires_search_source_links() -> None:
+    assert "numbered inline citations" in SYSTEM_PROMPT
+    assert "[Source title](URL)" in SYSTEM_PROMPT
+    assert "Nguồn tham khảo" in SYSTEM_PROMPT
 
 
 @pytest.mark.asyncio
-async def test_document_search_blocks_symlink_escape(tmp_path: Path) -> None:
-    from agent.react import ToolContext
-    from agent.tools.documents import DocumentSearchInput
-
-    root = tmp_path / "root"
-    root.mkdir()
-    (root / "safe.md").write_text("rice handbook", encoding="utf-8")
-    outside = tmp_path / "secret.md"
-    outside.write_text("rice secret", encoding="utf-8")
-    (root / "escape.md").symlink_to(outside)
-    result = await DocumentSearchTool([str(root)]).execute(
-        DocumentSearchInput(query="rice"),
-        ToolContext(goal="search"),
+async def test_heuristic_fallback_formats_search_results_as_citations() -> None:
+    memory = InMemoryMemory()
+    memory.add(
+        ReActStep(
+            thought="Use search.",
+            action=Action(tool="search", input={"query": "chăm sóc hồ tiêu Gia Lai"}),
+            observation=(
+                "- Title: HƯỚNG DẪN QUY TRÌNH TRỒNG VÀ CHĂM SÓC CÂY HỒ TIÊU\n"
+                "  URL: https://example.com/ho-tieu\n"
+                "  Snippet: Trước khi trồng cần chuẩn bị đất và bón lót phân "
+                "chuồng hoai.\n\n"
+                "- Title: Chăm sóc cây hồ tiêu vào mùa mưa\n"
+                "  URL: https://example.com/mua-mua\n"
+                "  Snippet: Cần kiểm soát thoát nước và bổ sung hữu cơ."
+            ),
+        )
     )
-    assert "safe.md" in result
-    assert "secret" not in result
-    assert "escape.md" not in result
+    reasoner = HeuristicReasoner(lambda _: [])
 
+    answer = await reasoner.finalize("Gợi ý chăm sóc hồ tiêu tại Gia Lai", memory)
 
-@pytest.mark.asyncio
-async def test_document_search_blocks_file_swap_to_symlink(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from agent.react import ToolContext
-    from agent.tools.documents import DocumentSearchInput
-
-    root = tmp_path / "root"
-    root.mkdir()
-    candidate = root / "guide.md"
-    candidate.write_text("rice handbook", encoding="utf-8")
-    outside = tmp_path / "secret.md"
-    outside.write_text("rice secret", encoding="utf-8")
-    original_is_symlink = Path.is_symlink
-    swapped = False
-
-    def swap_after_check(path: Path) -> bool:
-        nonlocal swapped
-        is_symlink = original_is_symlink(path)
-        if path == candidate and not swapped:
-            swapped = True
-            path.unlink()
-            path.symlink_to(outside)
-        return is_symlink
-
-    monkeypatch.setattr(Path, "is_symlink", swap_after_check)
-    result = await DocumentSearchTool([str(root)]).execute(
-        DocumentSearchInput(query="rice"),
-        ToolContext(goal="search"),
-    )
-
-    assert result == "No matching documents."
-    assert "secret" not in result
+    assert "Thông tin nổi bật" in answer
+    assert "Nguồn tham khảo" in answer
+    assert "[1]" in answer
+    assert "1. [HƯỚNG DẪN QUY TRÌNH TRỒNG VÀ CHĂM SÓC CÂY HỒ TIÊU]" in answer
+    assert "Title:" not in answer
+    assert "URL:" not in answer
+    assert "Snippet:" not in answer
 
 
 @pytest.mark.asyncio

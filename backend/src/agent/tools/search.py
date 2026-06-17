@@ -34,11 +34,22 @@ class SearchTool(Tool):
         )
         return (
             "\n\n".join(
-                f"- {item['title']}: {item['content']}"
-                for item in results.get("results", [])
+                _format_search_result(item) for item in results.get("results", [])
             )
             or "Không tìm thấy kết quả phù hợp."
         )
+
+
+def _format_search_result(item: dict[str, Any]) -> str:
+    title = str(item.get("title") or "Không có tiêu đề")
+    content = str(item.get("content") or "").strip()
+    url = str(item.get("url") or "").strip()
+    result = f"- Title: {title}"
+    if url:
+        result = f"{result}\n  URL: {url}"
+    if content:
+        result = f"{result}\n  Snippet: {content}"
+    return result
 
 
 __all__ = ["SearchInput", "SearchTool"]

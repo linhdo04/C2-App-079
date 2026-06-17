@@ -3,13 +3,14 @@
 import asyncio
 from collections.abc import Callable, Sequence
 from typing import Any, cast
+from urllib.parse import urlparse
 
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from .prompts import REACT_PROMPT, SYSTEM_PROMPT
 from .react import Action, Memory, Reasoner, ReasoningDecision, Tool
-from .tracing import langchain_config
+from .tracing import agent_span, langchain_config, update_observation
 
 logger = structlog.get_logger(__name__)
 
@@ -54,16 +55,38 @@ class GeminiReasoner:
                 )
             ),
         ]
-        response = await asyncio.wait_for(
-            self._structured_llm.ainvoke(
-                messages,
-                config=langchain_config(
-                    "reasoner-decide",
-                    extra_metadata={"tool_count": len(tools)},
-                ),
-            ),
-            timeout=self._timeout_seconds,
-        )
+        span_metadata = {
+            "operation": "decide",
+            "timeout_seconds": self._timeout_seconds,
+            "tool_count": len(tools),
+        }
+        with agent_span("agent-reasoner", metadata=span_metadata) as span:
+            try:
+                response = await asyncio.wait_for(
+                    self._structured_llm.ainvoke(
+                        messages,
+                        config=langchain_config(
+                            "reasoner-decide",
+                            extra_metadata=span_metadata,
+                        ),
+                    ),
+                    timeout=self._timeout_seconds,
+                )
+            except Exception as exc:
+                update_observation(
+                    span,
+                    operation="agent-reasoner",
+                    metadata={
+                        **span_metadata,
+                        "error_type": type(exc).__name__,
+                        "timed_out": isinstance(exc, TimeoutError),
+                    },
+                    level="ERROR",
+                    status_message=(
+                        f"Reasoner decide failed with {type(exc).__name__}."
+                    ),
+                )
+                raise
         if isinstance(response, ReasoningDecision):
             return response
         return ReasoningDecision.model_validate(response)
@@ -82,13 +105,37 @@ class GeminiReasoner:
                 )
             ),
         ]
-        response = await asyncio.wait_for(
-            self._llm.ainvoke(
-                messages,
-                config=langchain_config("reasoner-finalize"),
-            ),
-            timeout=self._timeout_seconds,
-        )
+        span_metadata = {
+            "operation": "finalize",
+            "timeout_seconds": self._timeout_seconds,
+        }
+        with agent_span("agent-reasoner", metadata=span_metadata) as span:
+            try:
+                response = await asyncio.wait_for(
+                    self._llm.ainvoke(
+                        messages,
+                        config=langchain_config(
+                            "reasoner-finalize",
+                            extra_metadata=span_metadata,
+                        ),
+                    ),
+                    timeout=self._timeout_seconds,
+                )
+            except Exception as exc:
+                update_observation(
+                    span,
+                    operation="agent-reasoner",
+                    metadata={
+                        **span_metadata,
+                        "error_type": type(exc).__name__,
+                        "timed_out": isinstance(exc, TimeoutError),
+                    },
+                    level="ERROR",
+                    status_message=(
+                        f"Reasoner finalize failed with {type(exc).__name__}."
+                    ),
+                )
+                raise
         self._log_usage(response)
         return str(getattr(response, "content", response))
 
@@ -151,6 +198,15 @@ class HeuristicReasoner:
 
     @staticmethod
     def _answer(goal: str, memory: Memory) -> str:
+        search_results = [
+            result
+            for step in memory.steps()
+            if step.action is not None and step.action.tool == "search"
+            for result in _parse_search_observation(step.observation)
+        ]
+        if search_results:
+            return _format_search_fallback_answer(goal, search_results)
+
         observations = [
             f"- {step.action.tool}: {step.observation}"
             for step in memory.steps()
@@ -159,6 +215,79 @@ class HeuristicReasoner:
         if observations:
             return "Kết quả thu thập được:\n" + "\n".join(observations)
         return f"Tôi chưa có đủ dữ liệu để trả lời an toàn. Yêu cầu đã nhận: {goal}"
+
+
+def _parse_search_observation(observation: str) -> list[dict[str, str]]:
+    results: list[dict[str, str]] = []
+    for block in observation.split("\n\n"):
+        result: dict[str, str] = {}
+        current_key: str | None = None
+        for raw_line in block.splitlines():
+            line = raw_line.strip()
+            if line.startswith("- Title:"):
+                result["title"] = line.removeprefix("- Title:").strip()
+                current_key = "title"
+            elif line.startswith("URL:"):
+                result["url"] = line.removeprefix("URL:").strip()
+                current_key = "url"
+            elif line.startswith("Snippet:"):
+                result["snippet"] = line.removeprefix("Snippet:").strip()
+                current_key = "snippet"
+            elif current_key is not None and line:
+                result[current_key] = f"{result[current_key]} {line}".strip()
+        if result.get("url"):
+            results.append(result)
+    return results
+
+
+def _format_search_fallback_answer(
+    goal: str,
+    results: list[dict[str, str]],
+    *,
+    limit: int = 5,
+) -> str:
+    unique_results: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+    for result in results:
+        url = result["url"]
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
+        unique_results.append(result)
+        if len(unique_results) >= limit:
+            break
+
+    bullets = []
+    sources = []
+    for index, result in enumerate(unique_results, start=1):
+        snippet = _shorten(result.get("snippet", "").strip(), 260)
+        title = result.get("title") or _source_label(result["url"])
+        if snippet:
+            bullets.append(f"- {snippet} [{index}]")
+        else:
+            bullets.append(f"- Có nguồn liên quan: {title} [{index}]")
+        sources.append(f"{index}. [{title}]({result['url']})")
+
+    return "\n\n".join(
+        [
+            "Tôi tìm thấy một số nguồn web liên quan. Bạn nên dùng các nguồn "
+            "dưới đây để kiểm chứng trước khi áp dụng.",
+            f"Yêu cầu: {goal}",
+            "Thông tin nổi bật:\n" + "\n".join(bullets),
+            "Nguồn tham khảo:\n" + "\n".join(sources),
+        ]
+    )
+
+
+def _shorten(value: str, max_length: int) -> str:
+    if len(value) <= max_length:
+        return value
+    return value[: max_length - 3].rstrip() + "..."
+
+
+def _source_label(url: str) -> str:
+    host = urlparse(url).netloc.removeprefix("www.")
+    return host or "Nguồn tham khảo"
 
 
 class FallbackReasoner:
