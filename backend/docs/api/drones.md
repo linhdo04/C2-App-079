@@ -1,6 +1,6 @@
 # Drone API
 
-## `POST /drones/telemetry`
+## `POST /api/drones/telemetry`
 
 Nhận telemetry từ drone, lưu vào bảng `telemetry`, và cập nhật `last_seen` cùng
 tọa độ hiện tại của `iot_nodes` khi payload có `latitude` hoặc `longitude`.
