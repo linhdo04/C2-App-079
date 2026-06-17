@@ -12,7 +12,6 @@ export function useCurrentUserQuery(isAuthenticated: boolean) {
     enabled: isAuthenticated,
     queryKey: ["auth", "me"],
     queryFn: () => requestProtected<ApiResponse<User>>("/auth/me").then((response) => response.data),
-    refetchOnWindowFocus: false,
   });
 }
 
