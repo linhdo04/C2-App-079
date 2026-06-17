@@ -13,6 +13,7 @@ from typing import Any, Literal, Protocol
 import structlog
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+from .guardrails import GuardrailPipeline
 from .tracing import (
     AgentTraceContext,
     agent_run_observation,
@@ -23,7 +24,13 @@ from .tracing import (
 
 logger = structlog.get_logger(__name__)
 
-TerminationReason = Literal["done", "max_iterations", "no_progress", "reasoner_error"]
+TerminationReason = Literal[
+    "done",
+    "max_iterations",
+    "no_progress",
+    "reasoner_error",
+    "guardrail_blocked",
+]
 
 
 class ConversationMessage(BaseModel):
@@ -209,6 +216,7 @@ class Executor:
         timeout_seconds: float,
         max_retries: int = 1,
         backoff_seconds: float = 0.25,
+        guardrails: GuardrailPipeline | None = None,
     ) -> None:
         if timeout_seconds <= 0 or backoff_seconds < 0:
             raise ValueError("Invalid executor timing configuration")
@@ -218,6 +226,7 @@ class Executor:
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self.backoff_seconds = backoff_seconds
+        self.guardrails = guardrails
 
     async def execute(
         self,
@@ -242,6 +251,25 @@ class Executor:
                 succeeded=False,
                 attempts=0,
             )
+        if self.guardrails is not None:
+            decision = self.guardrails.check_tool_input(
+                tool.name,
+                validated_input.model_dump(mode="json"),
+            )
+            if decision.blocked:
+                logger.warning(
+                    "agent_guardrail_blocked",
+                    run_id=context.run_id,
+                    stage="tool_input",
+                    tool=tool.name,
+                    reason=decision.reason,
+                )
+                return ToolExecutionResult(
+                    observation="Tool input blocked by safety guardrail.",
+                    succeeded=False,
+                    attempts=0,
+                )
+            validated_input = tool.input_model.model_validate_json(decision.content)
 
         await _emit(
             on_event,
@@ -285,7 +313,24 @@ class Executor:
                         duration_ms=duration_ms,
                     ),
                 )
-                return ToolExecutionResult(str(observation), True, attempt)
+                safe_observation = str(observation)
+                if self.guardrails is not None:
+                    output_decision = self.guardrails.check_tool_output(
+                        tool.name,
+                        safe_observation,
+                    )
+                    if output_decision.blocked:
+                        logger.warning(
+                            "agent_guardrail_blocked",
+                            run_id=context.run_id,
+                            stage="tool_output",
+                            tool=tool.name,
+                            reason=output_decision.reason,
+                        )
+                        safe_observation = "Tool output blocked by safety guardrail."
+                    else:
+                        safe_observation = output_decision.content
+                return ToolExecutionResult(safe_observation, True, attempt)
             except Exception as exc:
                 should_retry = _retryable_error(exc) and attempt < allowed_attempts
                 logger.warning(
@@ -362,6 +407,7 @@ class AgentLoop:
         executor: Executor,
         termination_condition: TerminationCondition,
         max_iterations: int = 6,
+        guardrails: GuardrailPipeline | None = None,
     ) -> None:
         if max_iterations <= 0:
             raise ValueError("max_iterations must be positive")
@@ -369,6 +415,7 @@ class AgentLoop:
         self.executor = executor
         self.termination_condition = termination_condition
         self.max_iterations = max_iterations
+        self.guardrails = guardrails
 
     async def run(
         self,
@@ -388,21 +435,57 @@ class AgentLoop:
         )
         trace_token = set_trace_context(trace_context)
         started_at = time.perf_counter()
-        active_memory = memory or InMemoryMemory()
-        context = ToolContext(goal=goal, user_id=user_id, run_id=run_id)
-        calls: set[str] = set()
-        reason: TerminationReason = "max_iterations"
-        done = False
-        final_response = ""
-        last_iteration = 0
 
         try:
-            with agent_run_observation(trace_context, question=goal) as observation:
+            checked_goal = (
+                self.guardrails.check_input(goal)
+                if self.guardrails is not None
+                else None
+            )
+            if checked_goal is not None and checked_goal.blocked:
+                duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+                logger.warning(
+                    "agent_guardrail_blocked",
+                    run_id=run_id,
+                    stage="input",
+                    reason=checked_goal.reason,
+                )
+                await _emit(
+                    on_event,
+                    AgentEvent(
+                        "completed",
+                        run_id,
+                        0,
+                        duration_ms=duration_ms,
+                        termination_reason="guardrail_blocked",
+                    ),
+                )
+                return AgentLoopResult(
+                    final_response=checked_goal.content,
+                    done=False,
+                    iterations=0,
+                    steps=(),
+                    termination_reason="guardrail_blocked",
+                    run_id=run_id,
+                )
+
+            safe_goal = checked_goal.content if checked_goal is not None else goal
+            active_memory = memory or InMemoryMemory()
+            context = ToolContext(goal=safe_goal, user_id=user_id, run_id=run_id)
+            calls: set[str] = set()
+            reason: TerminationReason = "max_iterations"
+            done = False
+            final_response = ""
+            last_iteration = 0
+
+            with agent_run_observation(
+                trace_context, question=safe_goal
+            ) as observation:
                 for iteration in range(1, self.max_iterations + 1):
                     last_iteration = iteration
                     try:
                         decision = await self.reasoner.decide(
-                            goal, active_memory, self.executor.registry.list()
+                            safe_goal, active_memory, self.executor.registry.list()
                         )
                     except Exception as exc:
                         logger.error(
@@ -459,10 +542,24 @@ class AgentLoop:
                 if not final_response:
                     try:
                         final_response = await self.reasoner.finalize(
-                            goal, active_memory
+                            safe_goal, active_memory
                         )
                     except Exception:
                         final_response = "Tôi chưa thể hoàn tất yêu cầu vào lúc này."
+                if self.guardrails is not None:
+                    output_decision = self.guardrails.check_output(final_response)
+                    if output_decision.blocked:
+                        logger.warning(
+                            "agent_guardrail_blocked",
+                            run_id=run_id,
+                            stage="output",
+                            reason=output_decision.reason,
+                        )
+                        final_response = output_decision.content
+                        reason = "guardrail_blocked"
+                        done = False
+                    else:
+                        final_response = output_decision.content
 
                 result = AgentLoopResult(
                     final_response=final_response,

@@ -55,6 +55,23 @@ multi-turn conversations trong Langfuse Sessions view.
 Tool execution được bọc bằng span metadata cấp cao (`tool`, `iteration`,
 `attempt`) nhưng không ghi raw tool observation để giảm rủi ro lộ dữ liệu nội bộ.
 
+## Guardrails
+
+Agent áp dụng guardrail deterministic theo các lớp trước/sau agent và quanh
+tool execution:
+
+- Input guardrail chặn prompt-injection rõ ràng và secret/API key trước khi gọi
+  reasoner.
+- PII guardrail redact email và mask credit card theo Luhn check trên input,
+  tool observation và final output.
+- Tool guardrail validate payload đã qua Pydantic, chặn secret trong tool input
+  và sanitize tool output trước khi đưa lại vào ReAct memory.
+- Output guardrail quét final answer lần cuối trước khi trả về HTTP/SSE.
+
+Các guardrail không ghi raw nội dung vào log; log chỉ chứa stage, tool và lý do
+chặn cấp cao. Đây là implementation nội bộ tương đương best practice middleware
+của LangChain, phù hợp với ReAct loop riêng của project.
+
 ## Cấu hình
 
 ```text
@@ -70,6 +87,10 @@ AGENT_LLM_TIMEOUT_SECONDS=20
 AGENT_MEMORY_MAX_MESSAGES=10
 AGENT_MEMORY_MAX_CHARACTERS=12000
 AGENT_DOCUMENT_ROOTS=
+AGENT_GUARDRAILS_ENABLED=True
+AGENT_GUARDRAILS_REDACT_PII=True
+AGENT_GUARDRAILS_BLOCK_SECRETS=True
+AGENT_GUARDRAILS_BLOCK_PROMPT_INJECTION=True
 ```
 
 ## Mở rộng
