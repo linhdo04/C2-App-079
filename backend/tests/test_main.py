@@ -29,6 +29,7 @@ def test_api_prefix_is_applied_to_application_routes() -> None:
     route_paths = {route.path for route in app.routes if hasattr(route, "path")}
 
     assert f"{settings.api_prefix}/auth/login" in route_paths
+    assert f"{settings.api_prefix}/drones/telemetry" in route_paths
     assert f"{settings.api_prefix}/agent/ask" in route_paths
     assert f"{settings.api_prefix}/dashboard/telemetry" in route_paths
     assert f"{settings.api_prefix}/health" in route_paths

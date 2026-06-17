@@ -15,7 +15,7 @@ from infrastructure import close_db, close_redis, get_redis, init_db, init_redis
 from .dependencies import get_current_user
 from .middlewares import error_handling, logging, rate_limiting
 from .responses import ERROR_RESPONSES, DataResponse
-from .routes import agent_router, auth_router, dashboard_router
+from .routes import agent_router, auth_router, dashboard_router, drone_router
 
 
 @asynccontextmanager
@@ -72,6 +72,7 @@ app.add_middleware(
 
 api_router = APIRouter(prefix=settings.api_prefix)
 api_router.include_router(auth_router)
+api_router.include_router(drone_router)
 api_router.include_router(
     agent_router,
     dependencies=[Depends(get_current_user)],
