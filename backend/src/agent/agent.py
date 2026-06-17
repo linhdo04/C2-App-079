@@ -25,7 +25,6 @@ class AgentStreamEvent(TypedDict, total=False):
 
 TOOL_STATUS_MESSAGES = {
     "calculator": "Đang tính toán...",
-    "document_search": "Đang tìm trong tài liệu...",
     "telemetry": "Đang phân tích nhiệt độ và độ ẩm...",
     "search": "Đang tìm kiếm...",
     "analysis": "Đang phân tích dữ liệu mùa vụ...",

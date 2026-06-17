@@ -6,8 +6,7 @@ validated model trong `execute()`.
 | Tool | Input | Ghi chú |
 | --- | --- | --- |
 | `calculator` | `expression` | AST giới hạn độ dài, depth, operator và magnitude |
-| `document_search` | `query`, `max_results` | allowlisted roots, chặn symlink/path escape, extension và file lớn |
-| `search` | `query`, `max_results` | Tavily, idempotent và retryable |
+| `search` | `query`, `max_results` | Tavily, trả nội dung kèm link nguồn khi có, idempotent và retryable |
 | `telemetry` | `limit` | lọc theo authenticated user ownership |
 | `analysis` | crop, area, yield, season | tính sản lượng khi đủ dữ liệu |
 

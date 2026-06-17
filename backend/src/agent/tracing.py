@@ -146,6 +146,35 @@ def agent_span(
         yield span
 
 
+def update_observation(
+    observation: Any,
+    *,
+    operation: str = "observation-update",
+    metadata: dict[str, Any] | None = None,
+    level: str | None = None,
+    status_message: str | None = None,
+    output: Any | None = None,
+) -> None:
+    if observation is None:
+        return
+    kwargs: dict[str, Any] = {}
+    if metadata is not None:
+        context = current_trace_context()
+        kwargs["metadata"] = (
+            _metadata(operation, context, extra=metadata)
+            if context is not None
+            else metadata
+        )
+    if level is not None:
+        kwargs["level"] = level
+    if status_message is not None:
+        kwargs["status_message"] = status_message
+    if output is not None:
+        kwargs["output"] = output
+    if kwargs:
+        observation.update(**kwargs)
+
+
 def null_observation() -> Any:
     return nullcontext()
 
@@ -159,4 +188,5 @@ __all__ = [
     "langfuse_enabled",
     "reset_trace_context",
     "set_trace_context",
+    "update_observation",
 ]

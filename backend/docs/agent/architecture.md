@@ -9,8 +9,8 @@
 - `InMemoryMemory`: recent conversation và request-local ReAct steps.
 
 `factory.py` là composition root production. Gemini là primary reasoner;
-heuristic reasoner là fallback. Registry production có `calculator`,
-`document_search`, `search`, `telemetry`, `analysis`.
+heuristic reasoner là fallback. Registry production có `calculator`, `search`,
+`telemetry`, `analysis`.
 
 Mỗi run có `run_id`. Structured logs ghi iteration/tool attempt/duration,
 provider fallback, termination reason và final `agent_run_summary`.
