@@ -28,6 +28,19 @@ class Settings(BaseSettings):
     agent_llm_timeout_seconds: float = Field(
         alias="AGENT_LLM_TIMEOUT_SECONDS", default=20.0, gt=0
     )
+    agent_llm_max_retries: int = Field(alias="AGENT_LLM_MAX_RETRIES", default=1, ge=0)
+    agent_llm_retry_backoff_seconds: float = Field(
+        alias="AGENT_LLM_RETRY_BACKOFF_SECONDS", default=0.5, ge=0
+    )
+    agent_search_filter_enabled: bool = Field(
+        alias="AGENT_SEARCH_FILTER_ENABLED", default=True
+    )
+    agent_search_filter_timeout_seconds: float = Field(
+        alias="AGENT_SEARCH_FILTER_TIMEOUT_SECONDS", default=8.0, gt=0
+    )
+    agent_fallback_router_timeout_seconds: float = Field(
+        alias="AGENT_FALLBACK_ROUTER_TIMEOUT_SECONDS", default=6.0, gt=0
+    )
     agent_max_iterations: int = Field(alias="AGENT_MAX_ITERATIONS", default=6, gt=0)
     agent_tool_max_retries: int = Field(alias="AGENT_TOOL_MAX_RETRIES", default=1, ge=0)
     agent_tool_retry_backoff_seconds: float = Field(

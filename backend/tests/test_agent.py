@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+from collections.abc import Sequence
 from types import SimpleNamespace
 from typing import Any
 
@@ -12,12 +13,34 @@ from agent.prompts import SYSTEM_PROMPT
 from agent.react import (
     Action,
     AgentLoopResult,
+    CallableTool,
     ConversationMessage,
     InMemoryMemory,
+    Memory,
     ReActStep,
+    ReasoningDecision,
+    Tool,
 )
-from agent.reasoners import HeuristicReasoner
+from agent.reasoners import (
+    FallbackReasoner,
+    FallbackRouteDecision,
+    GeminiReasoner,
+    LLMRoutedFallbackReasoner,
+    LLMToolRouter,
+)
 from agent.tools import CalculatorTool, SearchInput, SearchTool
+from agent.tools.search import (
+    FilteredSearchResult,
+    RejectedSearchResult,
+    SearchFilterDecision,
+    SearchFilterInput,
+    SearchResultFilter,
+    UsableClaim,
+)
+
+
+class RateLimitError(Exception):
+    status_code = 429
 
 
 @pytest.mark.asyncio
@@ -68,14 +91,370 @@ async def test_search_tool_includes_result_links() -> None:
     assert "URL: https://example.com/rice-market" in result
 
 
+@pytest.mark.asyncio
+async def test_search_tool_filters_observation_with_coverage() -> None:
+    from agent.react import ToolContext
+
+    class FakeClient:
+        def search(self, *, query: str, max_results: int) -> dict[str, Any]:
+            return {
+                "results": [
+                    {
+                        "title": "Rice market",
+                        "content": "Prices increased this week.",
+                        "url": "https://example.com/rice-market",
+                    },
+                    {
+                        "title": "Unrelated",
+                        "content": "Movie listings.",
+                        "url": "https://example.com/movies",
+                    },
+                ]
+            }
+
+    class FakeFilter:
+        async def filter(self, data: Any) -> SearchFilterDecision:
+            assert data.question == "rice price"
+            assert len(data.results) == 2
+            return SearchFilterDecision(
+                coverage="partial",
+                relevant_results=[
+                    FilteredSearchResult(
+                        title="Rice market",
+                        url="https://example.com/rice-market",
+                        summary="Rice prices increased this week.",
+                        usable_claims=[
+                            UsableClaim(
+                                claim="Prices increased this week.",
+                                source_url="https://example.com/rice-market",
+                            )
+                        ],
+                        relevance_reason="Directly discusses rice prices.",
+                    )
+                ],
+                rejected_results=[
+                    RejectedSearchResult(
+                        title="Unrelated",
+                        url="https://example.com/movies",
+                        reason="Not about rice.",
+                    )
+                ],
+            )
+
+    tool = SearchTool.__new__(SearchTool)
+    tool._client = FakeClient()
+    setattr(tool, "_result_filter", FakeFilter())
+
+    result = await tool.execute(
+        SearchInput(query="rice price", max_results=2),
+        ToolContext(goal="search"),
+    )
+
+    assert "Coverage: partial" in result
+    assert "Rejected results: 1" in result
+    assert "Rice market" in result
+    assert "Prices increased this week." in result
+    assert "https://example.com/rice-market" in result
+    assert "Movie listings" not in result
+    assert "https://example.com/movies" not in result
+
+
+@pytest.mark.asyncio
+async def test_search_tool_falls_back_to_raw_results_when_filter_fails() -> None:
+    from agent.react import ToolContext
+
+    class FakeClient:
+        def search(self, *, query: str, max_results: int) -> dict[str, Any]:
+            return {
+                "results": [
+                    {
+                        "title": "Rice market",
+                        "content": "Prices increased this week.",
+                        "url": "https://example.com/rice-market",
+                    }
+                ]
+            }
+
+    class FailingFilter:
+        async def filter(self, data: Any) -> SearchFilterDecision:
+            raise TimeoutError
+
+    tool = SearchTool.__new__(SearchTool)
+    tool._client = FakeClient()
+    setattr(tool, "_result_filter", FailingFilter())
+
+    result = await tool.execute(
+        SearchInput(query="rice price", max_results=1),
+        ToolContext(goal="search"),
+    )
+
+    assert "lọc kết quả thất bại" in result
+    assert "Rice market" in result
+    assert "Snippet: Prices increased this week." in result
+
+
+@pytest.mark.asyncio
+async def test_search_tool_drops_filter_results_with_unknown_urls() -> None:
+    from agent.react import ToolContext
+
+    class FakeClient:
+        def search(self, *, query: str, max_results: int) -> dict[str, Any]:
+            return {
+                "results": [
+                    {
+                        "title": "Rice market",
+                        "content": "Prices increased this week.",
+                        "url": "https://example.com/rice-market",
+                    }
+                ]
+            }
+
+    class BadUrlFilter:
+        async def filter(self, data: Any) -> SearchFilterDecision:
+            return SearchFilterDecision(
+                coverage="insufficient",
+                relevant_results=[
+                    FilteredSearchResult(
+                        title="Invented",
+                        url="https://example.com/invented",
+                        summary="Invented summary.",
+                        usable_claims=[
+                            UsableClaim(
+                                claim="Invented claim.",
+                                source_url="https://example.com/invented",
+                            )
+                        ],
+                        relevance_reason="Invented reason.",
+                    )
+                ],
+                rejected_results=[],
+            )
+
+    tool = SearchTool.__new__(SearchTool)
+    tool._client = FakeClient()
+    setattr(tool, "_result_filter", BadUrlFilter())
+
+    result = await tool.execute(
+        SearchInput(query="rice price", max_results=1),
+        ToolContext(goal="search"),
+    )
+
+    assert "Coverage: insufficient" in result
+    assert "Không tìm thấy nguồn đủ phù hợp" in result
+    assert "Invented" not in result
+    assert "https://example.com/invented" not in result
+
+
+@pytest.mark.asyncio
+async def test_search_tool_filters_trace_regression_noise() -> None:
+    from agent.react import ToolContext
+
+    class FakeClient:
+        def search(self, *, query: str, max_results: int) -> dict[str, Any]:
+            return {
+                "results": [
+                    {
+                        "title": "Weather for Gia Lai",
+                        "content": "Gia Lai has rain and moderate humidity today.",
+                        "url": "https://example.com/weather",
+                    },
+                    {
+                        "title": "EPR compliance update",
+                        "content": "Packaging rules for manufacturers.",
+                        "url": "https://example.com/epr",
+                    },
+                ]
+            }
+
+    class TraceFilter:
+        async def filter(self, data: Any) -> SearchFilterDecision:
+            return SearchFilterDecision(
+                coverage="partial",
+                relevant_results=[
+                    FilteredSearchResult(
+                        title="Weather for Gia Lai",
+                        url="https://example.com/weather",
+                        summary="Gia Lai has rain and moderate humidity today.",
+                        usable_claims=[
+                            UsableClaim(
+                                claim="Rain and moderate humidity are expected.",
+                                source_url="https://example.com/weather",
+                            )
+                        ],
+                        relevance_reason="Weather source matches the location.",
+                    )
+                ],
+                rejected_results=[
+                    RejectedSearchResult(
+                        title="EPR compliance update",
+                        url="https://example.com/epr",
+                        reason="EPR compliance is unrelated to weather.",
+                    )
+                ],
+            )
+
+    tool = SearchTool.__new__(SearchTool)
+    tool._client = FakeClient()
+    setattr(tool, "_result_filter", TraceFilter())
+
+    result = await tool.execute(
+        SearchInput(query="weather Gia Lai", max_results=2),
+        ToolContext(goal="search"),
+    )
+
+    assert "Weather for Gia Lai" in result
+    assert "Rain and moderate humidity are expected." in result
+    assert "EPR compliance update" not in result
+    assert "https://example.com/epr" not in result
+
+
 def test_system_prompt_requires_search_source_links() -> None:
     assert "numbered inline citations" in SYSTEM_PROMPT
     assert "[Source title](URL)" in SYSTEM_PROMPT
     assert "Nguồn tham khảo" in SYSTEM_PROMPT
 
 
+def test_react_prompt_limits_thought() -> None:
+    from agent.prompts import REACT_PROMPT
+
+    assert "one short sentence" in REACT_PROMPT
+
+
 @pytest.mark.asyncio
-async def test_heuristic_fallback_formats_search_results_as_citations() -> None:
+async def test_gemini_reasoner_recovers_valid_json_from_raw_content_list() -> None:
+    class FakeBoundLLM:
+        async def ainvoke(self, *args: Any, **kwargs: Any) -> Any:
+            return SimpleNamespace(
+                content=[
+                    'thought":"broken prefix',
+                    (
+                        '{"thought":"Recovered.","action":null,'
+                        '"is_done":true,"final_answer":"Đã có câu trả lời."}'
+                    ),
+                ]
+            )
+
+    class FakeLLM:
+        def __init__(self) -> None:
+            self.bound_kwargs: dict[str, Any] = {}
+
+        def bind(self, **kwargs: Any) -> Any:
+            self.bound_kwargs = kwargs
+            return FakeBoundLLM()
+
+    llm = FakeLLM()
+    reasoner = GeminiReasoner(llm, timeout_seconds=1)
+
+    decision = await reasoner.decide("Trả lời ngắn", InMemoryMemory(), [])
+
+    assert llm.bound_kwargs["response_mime_type"] == "application/json"
+    assert llm.bound_kwargs["response_schema"]["title"] == "ReasoningDecision"
+    assert decision.is_done is True
+    assert decision.final_answer == "Đã có câu trả lời."
+
+
+@pytest.mark.asyncio
+async def test_gemini_reasoner_retries_retryable_llm_errors() -> None:
+    class FakeBoundLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def ainvoke(self, *args: Any, **kwargs: Any) -> Any:
+            self.calls += 1
+            if self.calls == 1:
+                raise RateLimitError
+            return {
+                "thought": "Recovered.",
+                "action": None,
+                "is_done": True,
+                "final_answer": "Đã thử lại thành công.",
+            }
+
+    class FakeLLM:
+        def __init__(self) -> None:
+            self.bound = FakeBoundLLM()
+
+        def bind(self, **kwargs: Any) -> Any:
+            return self.bound
+
+    llm = FakeLLM()
+    reasoner = GeminiReasoner(
+        llm,
+        timeout_seconds=1,
+        max_retries=1,
+        backoff_seconds=0,
+    )
+
+    decision = await reasoner.decide("Trả lời ngắn", InMemoryMemory(), [])
+
+    assert llm.bound.calls == 2
+    assert decision.final_answer == "Đã thử lại thành công."
+
+
+@pytest.mark.asyncio
+async def test_search_result_filter_retries_retryable_llm_errors() -> None:
+    class FakeBoundLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def ainvoke(self, *args: Any, **kwargs: Any) -> Any:
+            self.calls += 1
+            if self.calls == 1:
+                raise RateLimitError
+            return {
+                "coverage": "sufficient",
+                "relevant_results": [
+                    {
+                        "title": "Rice market",
+                        "url": "https://example.com/rice",
+                        "summary": "Rice prices increased.",
+                        "usable_claims": [
+                            {
+                                "claim": "Rice prices increased.",
+                                "source_url": "https://example.com/rice",
+                            }
+                        ],
+                        "relevance_reason": "Directly relevant.",
+                    }
+                ],
+                "rejected_results": [],
+            }
+
+    class FakeLLM:
+        def __init__(self) -> None:
+            self.bound = FakeBoundLLM()
+
+        def bind(self, **kwargs: Any) -> Any:
+            return self.bound
+
+    llm = FakeLLM()
+    result_filter = SearchResultFilter(
+        llm,
+        timeout_seconds=1,
+        max_retries=1,
+        backoff_seconds=0,
+    )
+
+    decision = await result_filter.filter(
+        SearchFilterInput(
+            question="rice price",
+            results=[
+                {
+                    "title": "Rice market",
+                    "url": "https://example.com/rice",
+                    "content": "Rice prices increased.",
+                }
+            ],
+        )
+    )
+
+    assert llm.bound.calls == 2
+    assert decision.coverage == "sufficient"
+    assert decision.relevant_results[0].url == "https://example.com/rice"
+
+
+@pytest.mark.asyncio
+async def test_llm_routed_fallback_formats_search_results_as_citations() -> None:
     memory = InMemoryMemory()
     memory.add(
         ReActStep(
@@ -92,7 +471,7 @@ async def test_heuristic_fallback_formats_search_results_as_citations() -> None:
             ),
         )
     )
-    reasoner = HeuristicReasoner(lambda _: [])
+    reasoner = LLMRoutedFallbackReasoner(None)
 
     answer = await reasoner.finalize("Gợi ý chăm sóc hồ tiêu tại Gia Lai", memory)
 
@@ -103,6 +482,237 @@ async def test_heuristic_fallback_formats_search_results_as_citations() -> None:
     assert "Title:" not in answer
     assert "URL:" not in answer
     assert "Snippet:" not in answer
+
+
+@pytest.mark.asyncio
+async def test_provider_fallback_uses_llm_router_selected_search() -> None:
+    class FailingReasoner:
+        async def decide(
+            self,
+            goal: str,
+            memory: Memory,
+            tools: Sequence[Tool],
+        ) -> ReasoningDecision:
+            raise TimeoutError
+
+        async def finalize(self, goal: str, memory: Memory) -> str:
+            raise TimeoutError
+
+    class FakeRouter(LLMToolRouter):
+        def __init__(self) -> None:
+            pass
+
+        async def route(
+            self,
+            goal: str,
+            memory: Memory,
+            tools: Sequence[Tool],
+        ) -> FallbackRouteDecision:
+            return FallbackRouteDecision(
+                tool="search",
+                input={"query": goal, "max_results": 3},
+                reason="Needs web evidence.",
+            )
+
+    async def handler(tool_input: Any, context: Any) -> str:
+        return "unused"
+
+    search_tool = CallableTool(
+        "search",
+        "Search web",
+        handler,
+        input_model=SearchInput,
+    )
+    reasoner = FallbackReasoner(
+        FailingReasoner(),
+        LLMRoutedFallbackReasoner(FakeRouter()),
+    )
+
+    decision = await reasoner.decide(
+        "chăm sóc hồ tiêu mùa mưa", InMemoryMemory(), (search_tool,)
+    )
+
+    assert decision.action == Action(
+        tool="search",
+        input={"query": "chăm sóc hồ tiêu mùa mưa", "max_results": 3},
+    )
+
+
+@pytest.mark.asyncio
+async def test_llm_tool_router_retries_retryable_llm_errors() -> None:
+    class FakeBoundLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def ainvoke(self, *args: Any, **kwargs: Any) -> Any:
+            self.calls += 1
+            if self.calls == 1:
+                raise RateLimitError
+            return {
+                "tool": "search",
+                "input": {"query": "hồ tiêu", "max_results": 2},
+                "reason": "Needs current web information.",
+            }
+
+    class FakeLLM:
+        def __init__(self) -> None:
+            self.bound = FakeBoundLLM()
+
+        def bind(self, **kwargs: Any) -> Any:
+            return self.bound
+
+    async def handler(tool_input: Any, context: Any) -> str:
+        return "unused"
+
+    search_tool = CallableTool(
+        "search",
+        "Search web",
+        handler,
+        input_model=SearchInput,
+    )
+    llm = FakeLLM()
+    router = LLMToolRouter(
+        llm,
+        timeout_seconds=1,
+        max_retries=1,
+        backoff_seconds=0,
+    )
+
+    decision = await router.route("hồ tiêu", InMemoryMemory(), (search_tool,))
+
+    assert llm.bound.calls == 2
+    assert decision.tool == "search"
+    assert decision.input == {"query": "hồ tiêu", "max_results": 2}
+
+
+@pytest.mark.asyncio
+async def test_llm_routed_fallback_uses_calculator_when_router_input_is_valid() -> None:
+    class FakeRouter(LLMToolRouter):
+        def __init__(self) -> None:
+            pass
+
+        async def route(
+            self,
+            goal: str,
+            memory: Memory,
+            tools: Sequence[Tool],
+        ) -> FallbackRouteDecision:
+            return FallbackRouteDecision(
+                tool="calculator",
+                input={"expression": "6 * 7"},
+                reason="Pure arithmetic.",
+            )
+
+    reasoner = LLMRoutedFallbackReasoner(FakeRouter())
+
+    decision = await reasoner.decide("6 * 7", InMemoryMemory(), (CalculatorTool(),))
+
+    assert decision.action == Action(
+        tool="calculator",
+        input={"expression": "6 * 7"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_llm_routed_fallback_defaults_to_search_for_invalid_router_input() -> (
+    None
+):
+    class FakeRouter(LLMToolRouter):
+        def __init__(self) -> None:
+            pass
+
+        async def route(
+            self,
+            goal: str,
+            memory: Memory,
+            tools: Sequence[Tool],
+        ) -> FallbackRouteDecision:
+            return FallbackRouteDecision(
+                tool="calculator",
+                input={"expression": ""},
+                reason="Invalid calculator input.",
+            )
+
+    async def handler(tool_input: Any, context: Any) -> str:
+        return "unused"
+
+    search_tool = CallableTool(
+        "search",
+        "Search web",
+        handler,
+        input_model=SearchInput,
+    )
+    reasoner = LLMRoutedFallbackReasoner(FakeRouter())
+
+    decision = await reasoner.decide(
+        "thông tin canh tác mới", InMemoryMemory(), (search_tool, CalculatorTool())
+    )
+
+    assert decision.action == Action(
+        tool="search",
+        input={"query": "thông tin canh tác mới", "max_results": 5},
+    )
+
+
+@pytest.mark.asyncio
+async def test_llm_routed_fallback_defaults_to_search_when_router_fails() -> None:
+    class FailingRouter(LLMToolRouter):
+        def __init__(self) -> None:
+            pass
+
+        async def route(
+            self,
+            goal: str,
+            memory: Memory,
+            tools: Sequence[Tool],
+        ) -> FallbackRouteDecision:
+            raise TimeoutError
+
+    async def handler(tool_input: Any, context: Any) -> str:
+        return "unused"
+
+    search_tool = CallableTool(
+        "search",
+        "Search web",
+        handler,
+        input_model=SearchInput,
+    )
+    reasoner = LLMRoutedFallbackReasoner(FailingRouter())
+
+    decision = await reasoner.decide(
+        "khuyến nghị tưới tiêu", InMemoryMemory(), (search_tool,)
+    )
+
+    assert decision.action == Action(
+        tool="search",
+        input={"query": "khuyến nghị tưới tiêu", "max_results": 5},
+    )
+
+
+@pytest.mark.asyncio
+async def test_llm_routed_fallback_without_search_returns_clear_error() -> None:
+    class FailingRouter(LLMToolRouter):
+        def __init__(self) -> None:
+            pass
+
+        async def route(
+            self,
+            goal: str,
+            memory: Memory,
+            tools: Sequence[Tool],
+        ) -> FallbackRouteDecision:
+            raise TimeoutError
+
+    reasoner = LLMRoutedFallbackReasoner(FailingRouter())
+
+    decision = await reasoner.decide(
+        "câu hỏi mở", InMemoryMemory(), (CalculatorTool(),)
+    )
+
+    assert decision.is_done is True
+    assert decision.final_answer is not None
+    assert "fallback router" in decision.final_answer
+    assert "Tôi chưa có đủ dữ liệu" not in decision.final_answer
 
 
 @pytest.mark.asyncio
