@@ -21,11 +21,17 @@ retry.
 
 Loop chặn trùng `tool + canonical input` và ghi termination reason:
 `done`, `max_iterations`, `no_progress`, hoặc `reasoner_error`.
+Reasoner yêu cầu Gemini trả JSON qua native response schema và tự validate bằng
+Pydantic, kèm bước phục hồi parser cho raw provider response bị bọc/lẫn text
+nhưng vẫn chứa JSON hợp lệ. Nếu reasoner chính lỗi, fallback dùng Gemini router
+schema nhỏ để chọn tool; nếu router cũng lỗi thì mặc định dùng `search`.
 
 ## Production tools
 
 - `calculator`: AST arithmetic giới hạn.
-- `search`: Tavily, trả nội dung kèm link nguồn khi có.
+- `search`: Tavily, sau đó lọc/tóm tắt kết quả bằng Gemini trước khi đưa vào
+  ReAct memory. Nếu filter lỗi hoặc timeout, tool degrade về formatter thô và
+  ghi chú lỗi lọc.
 - `telemetry`: dữ liệu mission thuộc authenticated user.
 - `analysis`: ước tính sản lượng cây trồng.
 
@@ -83,6 +89,11 @@ AGENT_TOOL_MAX_RETRIES=1
 AGENT_TOOL_RETRY_BACKOFF_SECONDS=0.25
 AGENT_TOOL_TIMEOUT_SECONDS=15
 AGENT_LLM_TIMEOUT_SECONDS=20
+AGENT_LLM_MAX_RETRIES=1
+AGENT_LLM_RETRY_BACKOFF_SECONDS=0.5
+AGENT_FALLBACK_ROUTER_TIMEOUT_SECONDS=6
+AGENT_SEARCH_FILTER_ENABLED=True
+AGENT_SEARCH_FILTER_TIMEOUT_SECONDS=8
 AGENT_MEMORY_MAX_MESSAGES=10
 AGENT_MEMORY_MAX_CHARACTERS=12000
 AGENT_GUARDRAILS_ENABLED=True

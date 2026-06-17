@@ -5,39 +5,18 @@ from core import settings
 from .guardrails import build_default_guardrails
 from .llm import llm
 from .react import Agent, AgentLoop, DoneOrMaxIterations, Executor, ToolRegistry
-from .reasoners import FallbackReasoner, GeminiReasoner, HeuristicReasoner
+from .reasoners import (
+    FallbackReasoner,
+    GeminiReasoner,
+    LLMRoutedFallbackReasoner,
+    LLMToolRouter,
+)
 from .tools import (
     AnalysisTool,
     CalculatorTool,
     SearchTool,
     TelemetryTool,
 )
-
-TELEMETRY_KEYWORDS = ("nhiệt độ", "độ ẩm", "cảm biến", "telemetry", "môi trường")
-ANALYSIS_KEYWORDS = ("diện tích", "năng suất", "sản lượng", "tấn/ha", "thu hoạch")
-SEARCH_KEYWORDS = (
-    "giá",
-    "thị trường",
-    "kỹ thuật",
-    "sâu bệnh",
-    "mới nhất",
-    "phân bón",
-    "giống",
-)
-
-
-def _route_intents(question: str) -> list[str]:
-    normalized = question.casefold()
-    result: list[str] = []
-    if any(keyword in normalized for keyword in TELEMETRY_KEYWORDS):
-        result.append("telemetry")
-    if any(keyword in normalized for keyword in ANALYSIS_KEYWORDS):
-        result.append("analysis")
-    if any(keyword in normalized for keyword in SEARCH_KEYWORDS):
-        result.append("search")
-    if not result and any(character.isdigit() for character in normalized):
-        result.append("calculator")
-    return result
 
 
 def create_default_agent() -> Agent:
@@ -51,8 +30,20 @@ def create_default_agent() -> Agent:
         ]
     )
     reasoner = FallbackReasoner(
-        GeminiReasoner(llm, timeout_seconds=settings.agent_llm_timeout_seconds),
-        HeuristicReasoner(_route_intents),
+        GeminiReasoner(
+            llm,
+            timeout_seconds=settings.agent_llm_timeout_seconds,
+            max_retries=settings.agent_llm_max_retries,
+            backoff_seconds=settings.agent_llm_retry_backoff_seconds,
+        ),
+        LLMRoutedFallbackReasoner(
+            LLMToolRouter(
+                llm,
+                timeout_seconds=settings.agent_fallback_router_timeout_seconds,
+                max_retries=settings.agent_llm_max_retries,
+                backoff_seconds=settings.agent_llm_retry_backoff_seconds,
+            )
+        ),
     )
     return Agent(
         AgentLoop(
