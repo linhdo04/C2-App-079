@@ -103,21 +103,25 @@ async def test_run_agent_forwards_bounded_history(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     seen_memory: Any = None
+    seen_session_id: str | None = None
 
     class FakeAgent:
         async def run(self, goal: str, **kwargs: Any) -> AgentLoopResult:
-            nonlocal seen_memory
+            nonlocal seen_memory, seen_session_id
             seen_memory = kwargs["memory"]
+            seen_session_id = kwargs["session_id"]
             return AgentLoopResult("answer", True, 1, (), "done", "run")
 
     monkeypatch.setattr("agent.agent.default_agent", FakeAgent())
     answer = await run_agent(
         "question",
         user_id=7,
+        session_id="chat-42",
         history=[ConversationMessage(role="user", content="previous")],
     )
     assert answer == "answer"
     assert seen_memory.conversation()[0].content == "previous"
+    assert seen_session_id == "chat-42"
 
 
 @pytest.mark.asyncio

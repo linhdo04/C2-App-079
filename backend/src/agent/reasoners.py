@@ -9,6 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from .prompts import REACT_PROMPT, SYSTEM_PROMPT
 from .react import Action, Memory, Reasoner, ReasoningDecision, Tool
+from .tracing import langchain_config
 
 logger = structlog.get_logger(__name__)
 
@@ -42,19 +43,24 @@ class GeminiReasoner:
             "\n".join(step.model_dump_json() for step in memory.steps())
             or "(no previous steps)"
         )
+        messages = [
+            SystemMessage(content=f"{SYSTEM_PROMPT}\n\n{REACT_PROMPT}"),
+            HumanMessage(
+                content=(
+                    f"User goal:\n{goal}\n\n"
+                    f"Recent conversation:\n{conversation}\n\n"
+                    f"Available tools:\n{tool_catalog}\n\n"
+                    f"Previous ReAct steps:\n{history}"
+                )
+            ),
+        ]
         response = await asyncio.wait_for(
             self._structured_llm.ainvoke(
-                [
-                    SystemMessage(content=f"{SYSTEM_PROMPT}\n\n{REACT_PROMPT}"),
-                    HumanMessage(
-                        content=(
-                            f"User goal:\n{goal}\n\n"
-                            f"Recent conversation:\n{conversation}\n\n"
-                            f"Available tools:\n{tool_catalog}\n\n"
-                            f"Previous ReAct steps:\n{history}"
-                        )
-                    ),
-                ]
+                messages,
+                config=langchain_config(
+                    "reasoner-decide",
+                    extra_metadata={"tool_count": len(tools)},
+                ),
             ),
             timeout=self._timeout_seconds,
         )
@@ -64,20 +70,22 @@ class GeminiReasoner:
 
     async def finalize(self, goal: str, memory: Memory) -> str:
         history = "\n".join(step.model_dump_json() for step in memory.steps())
+        messages = [
+            SystemMessage(content=SYSTEM_PROMPT),
+            HumanMessage(
+                content=(
+                    f"User goal:\n{goal}\n\n"
+                    f"ReAct steps:\n{history}\n\n"
+                    "The iteration limit was reached. Provide the safest "
+                    "useful final answer from available observations and "
+                    "state any limitation."
+                )
+            ),
+        ]
         response = await asyncio.wait_for(
             self._llm.ainvoke(
-                [
-                    SystemMessage(content=SYSTEM_PROMPT),
-                    HumanMessage(
-                        content=(
-                            f"User goal:\n{goal}\n\n"
-                            f"ReAct steps:\n{history}\n\n"
-                            "The iteration limit was reached. Provide the safest "
-                            "useful final answer from available observations and "
-                            "state any limitation."
-                        )
-                    ),
-                ]
+                messages,
+                config=langchain_config("reasoner-finalize"),
             ),
             timeout=self._timeout_seconds,
         )

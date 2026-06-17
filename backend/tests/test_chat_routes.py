@@ -353,10 +353,12 @@ async def test_create_chat_message_saves_question_and_answer(
         question: str,
         user_id: int,
         *,
+        session_id: str,
         history: list[Any],
     ) -> str:
         assert question == "Phân tích nhiệt độ và độ ẩm"
         assert user_id == 7
+        assert session_id == "10"
         assert history == []
         return "Nhiệt độ trung bình 30°C, độ ẩm trung bình 70%."
 
@@ -418,10 +420,12 @@ async def test_stream_chat_message_emits_tokens_and_persists_done_event(
         question: str,
         user_id: int,
         *,
+        session_id: str,
         history: list[Any],
     ) -> Any:
         assert question == "Tư vấn lúa"
         assert user_id == 7
+        assert session_id == "10"
         assert history == []
         yield {
             "event": "status",

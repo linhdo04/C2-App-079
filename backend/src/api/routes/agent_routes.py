@@ -490,6 +490,7 @@ async def create_chat_message(
         answer = await run_agent(
             question,
             current_user.id,
+            session_id=str(chat_id),
             history=history,
         )
     except Exception as exc:
@@ -530,6 +531,7 @@ async def stream_chat_message(
             async for event in stream_agent(
                 question,
                 user_id,
+                session_id=str(chat_id),
                 history=history,
             ):
                 event_name = event["event"]

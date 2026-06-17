@@ -44,9 +44,24 @@ diễn ra, sau đó phát final answer theo nhiều token event. Thought, observ
 và exception nội bộ không đi ra client. Chat chỉ được persist sau khi final
 answer hoàn chỉnh.
 
+## Tracing
+
+Agent tracing dùng Langfuse khi `LANGFUSE_PUBLIC_KEY` và
+`LANGFUSE_SECRET_KEY` được cấu hình. Mỗi agent run tạo một trace `agent-run`;
+LangChain/Gemini calls được gửi qua Langfuse callback để giữ model, token usage
+và generation metadata. Chat routes truyền `chat_id` làm `session_id` để nhóm
+multi-turn conversations trong Langfuse Sessions view.
+
+Tool execution được bọc bằng span metadata cấp cao (`tool`, `iteration`,
+`attempt`) nhưng không ghi raw tool observation để giảm rủi ro lộ dữ liệu nội bộ.
+
 ## Cấu hình
 
 ```text
+LANGFUSE_PUBLIC_KEY=
+LANGFUSE_SECRET_KEY=
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_TRACING_ENABLED=True
 AGENT_MAX_ITERATIONS=6
 AGENT_TOOL_MAX_RETRIES=1
 AGENT_TOOL_RETRY_BACKOFF_SECONDS=0.25

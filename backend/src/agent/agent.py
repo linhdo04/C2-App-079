@@ -44,11 +44,13 @@ async def run_agent(
     question: str,
     user_id: int | None = None,
     *,
+    session_id: str | None = None,
     history: Sequence[ConversationMessage] | None = None,
 ) -> str:
     result = await default_agent.run(
         question,
         user_id=user_id,
+        session_id=session_id,
         memory=_memory(history),
     )
     return result.final_response
@@ -58,6 +60,7 @@ async def stream_agent(
     question: str,
     user_id: int | None = None,
     *,
+    session_id: str | None = None,
     history: Sequence[ConversationMessage] | None = None,
 ) -> AsyncIterator[AgentStreamEvent]:
     queue: asyncio.Queue[AgentStreamEvent | None] = asyncio.Queue()
@@ -82,6 +85,7 @@ async def stream_agent(
             return await default_agent.run(
                 question,
                 user_id=user_id,
+                session_id=session_id,
                 memory=memory,
                 on_event=on_event,
             )

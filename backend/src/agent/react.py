@@ -13,6 +13,14 @@ from typing import Any, Literal, Protocol
 import structlog
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+from .tracing import (
+    AgentTraceContext,
+    agent_run_observation,
+    agent_span,
+    reset_trace_context,
+    set_trace_context,
+)
+
 logger = structlog.get_logger(__name__)
 
 TerminationReason = Literal["done", "max_iterations", "no_progress", "reasoner_error"]
@@ -245,10 +253,18 @@ class Executor:
         started_at = time.perf_counter()
         for attempt in range(1, allowed_attempts + 1):
             try:
-                observation = await asyncio.wait_for(
-                    tool.execute(validated_input, context),
-                    timeout=self.timeout_seconds,
-                )
+                with agent_span(
+                    "agent-tool",
+                    metadata={
+                        "tool": tool.name,
+                        "iteration": iteration,
+                        "attempt": attempt,
+                    },
+                ):
+                    observation = await asyncio.wait_for(
+                        tool.execute(validated_input, context),
+                        timeout=self.timeout_seconds,
+                    )
                 duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
                 logger.info(
                     "agent_tool_completed",
@@ -359,11 +375,18 @@ class AgentLoop:
         goal: str,
         *,
         user_id: int | None = None,
+        session_id: str | None = None,
         memory: Memory | None = None,
         on_step: StepCallback | None = None,
         on_event: EventCallback | None = None,
     ) -> AgentLoopResult:
         run_id = str(uuid.uuid4())
+        trace_context = AgentTraceContext(
+            run_id=run_id,
+            user_id=user_id,
+            session_id=session_id,
+        )
+        trace_token = set_trace_context(trace_context)
         started_at = time.perf_counter()
         active_memory = memory or InMemoryMemory()
         context = ToolContext(goal=goal, user_id=user_id, run_id=run_id)
@@ -373,96 +396,114 @@ class AgentLoop:
         final_response = ""
         last_iteration = 0
 
-        for iteration in range(1, self.max_iterations + 1):
-            last_iteration = iteration
-            try:
-                decision = await self.reasoner.decide(
-                    goal, active_memory, self.executor.registry.list()
-                )
-            except Exception as exc:
-                logger.error(
-                    "agent_reasoner_failed",
+        try:
+            with agent_run_observation(trace_context, question=goal) as observation:
+                for iteration in range(1, self.max_iterations + 1):
+                    last_iteration = iteration
+                    try:
+                        decision = await self.reasoner.decide(
+                            goal, active_memory, self.executor.registry.list()
+                        )
+                    except Exception as exc:
+                        logger.error(
+                            "agent_reasoner_failed",
+                            run_id=run_id,
+                            iteration=iteration,
+                            error_type=type(exc).__name__,
+                        )
+                        reason = "reasoner_error"
+                        break
+
+                    if decision.is_done:
+                        final_response = decision.final_answer or ""
+                        step = ReActStep(
+                            thought=decision.thought,
+                            action=None,
+                            observation=final_response,
+                            is_done=True,
+                        )
+                        done = True
+                        reason = "done"
+                    else:
+                        action = decision.action
+                        if action is None:
+                            reason = "reasoner_error"
+                            break
+                        call_key = (
+                            f"{action.tool}:{json.dumps(action.input, sort_keys=True)}"
+                        )
+                        if call_key in calls:
+                            reason = "no_progress"
+                            break
+                        calls.add(call_key)
+                        execution = await self.executor.execute(
+                            action,
+                            context,
+                            iteration=iteration,
+                            on_event=on_event,
+                        )
+                        step = ReActStep(
+                            thought=decision.thought,
+                            action=action,
+                            observation=execution.observation,
+                        )
+
+                    active_memory.add(step)
+                    if on_step is not None:
+                        callback_result = on_step(iteration, step)
+                        if inspect.isawaitable(callback_result):
+                            await callback_result
+                    if done:
+                        break
+
+                if not final_response:
+                    try:
+                        final_response = await self.reasoner.finalize(
+                            goal, active_memory
+                        )
+                    except Exception:
+                        final_response = "Tôi chưa thể hoàn tất yêu cầu vào lúc này."
+
+                result = AgentLoopResult(
+                    final_response=final_response,
+                    done=done,
+                    iterations=last_iteration,
+                    steps=active_memory.steps(),
+                    termination_reason=reason,
                     run_id=run_id,
-                    iteration=iteration,
-                    error_type=type(exc).__name__,
                 )
-                reason = "reasoner_error"
-                break
-
-            if decision.is_done:
-                final_response = decision.final_answer or ""
-                step = ReActStep(
-                    thought=decision.thought,
-                    action=None,
-                    observation=final_response,
-                    is_done=True,
+                duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+                if observation is not None:
+                    observation.update(
+                        output={"response": result.final_response},
+                        metadata={
+                            "iterations": result.iterations,
+                            "termination_reason": reason,
+                            "success": done,
+                            "duration_ms": duration_ms,
+                        },
+                    )
+                logger.info(
+                    "agent_run_summary",
+                    run_id=run_id,
+                    success=done,
+                    duration_ms=duration_ms,
+                    iterations=result.iterations,
+                    termination_reason=reason,
                 )
-                done = True
-                reason = "done"
-            else:
-                action = decision.action
-                if action is None:
-                    reason = "reasoner_error"
-                    break
-                call_key = f"{action.tool}:{json.dumps(action.input, sort_keys=True)}"
-                if call_key in calls:
-                    reason = "no_progress"
-                    break
-                calls.add(call_key)
-                execution = await self.executor.execute(
-                    action,
-                    context,
-                    iteration=iteration,
-                    on_event=on_event,
+                await _emit(
+                    on_event,
+                    AgentEvent(
+                        "completed",
+                        run_id,
+                        result.iterations,
+                        duration_ms=duration_ms,
+                        termination_reason=reason,
+                    ),
                 )
-                step = ReActStep(
-                    thought=decision.thought,
-                    action=action,
-                    observation=execution.observation,
-                )
-
-            active_memory.add(step)
-            if on_step is not None:
-                callback_result = on_step(iteration, step)
-                if inspect.isawaitable(callback_result):
-                    await callback_result
-            if done:
-                break
-
-        if not final_response:
-            try:
-                final_response = await self.reasoner.finalize(goal, active_memory)
-            except Exception:
-                final_response = "Tôi chưa thể hoàn tất yêu cầu vào lúc này."
-
-        result = AgentLoopResult(
-            final_response=final_response,
-            done=done,
-            iterations=last_iteration,
-            steps=active_memory.steps(),
-            termination_reason=reason,
-            run_id=run_id,
-        )
-        duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
-        logger.info(
-            "agent_run_summary",
-            run_id=run_id,
-            success=done,
-            duration_ms=duration_ms,
-            iterations=result.iterations,
-            termination_reason=reason,
-        )
-        await _emit(
-            on_event,
-            AgentEvent(
-                "completed",
-                run_id,
-                result.iterations,
-                duration_ms=duration_ms,
-                termination_reason=reason,
-            ),
-        )
-        return result
+                return result
+        finally:
+            reset_trace_context(trace_token)
 
 
 class Agent:
@@ -474,6 +515,7 @@ class Agent:
         goal: str,
         *,
         user_id: int | None = None,
+        session_id: str | None = None,
         memory: Memory | None = None,
         on_step: StepCallback | None = None,
         on_event: EventCallback | None = None,
@@ -481,6 +523,7 @@ class Agent:
         return await self.loop.run(
             goal,
             user_id=user_id,
+            session_id=session_id,
             memory=memory,
             on_step=on_step,
             on_event=on_event,
