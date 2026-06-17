@@ -25,8 +25,7 @@ Loop chặn trùng `tool + canonical input` và ghi termination reason:
 ## Production tools
 
 - `calculator`: AST arithmetic giới hạn.
-- `document_search`: chỉ đọc root trong `AGENT_DOCUMENT_ROOTS`.
-- `search`: Tavily.
+- `search`: Tavily, trả nội dung kèm link nguồn khi có.
 - `telemetry`: dữ liệu mission thuộc authenticated user.
 - `analysis`: ước tính sản lượng cây trồng.
 
@@ -86,7 +85,6 @@ AGENT_TOOL_TIMEOUT_SECONDS=15
 AGENT_LLM_TIMEOUT_SECONDS=20
 AGENT_MEMORY_MAX_MESSAGES=10
 AGENT_MEMORY_MAX_CHARACTERS=12000
-AGENT_DOCUMENT_ROOTS=
 AGENT_GUARDRAILS_ENABLED=True
 AGENT_GUARDRAILS_REDACT_PII=True
 AGENT_GUARDRAILS_BLOCK_SECRETS=True
@@ -99,5 +97,6 @@ Tool mới implement `Tool`, khai báo `input_model`, `idempotent`, `retryable`,
 rồi đăng ký tại `factory.py`. Provider mới implement `Reasoner.decide()` và
 `Reasoner.finalize()`; không cần sửa loop.
 
-Xem thêm [kiến trúc](architecture.md), [tools](tools.md),
-[phát triển](development.md), và [Agent API](../api/agent.md).
+Xem thêm [kiến trúc](architecture.md), [luồng chạy](runtime-flows.md),
+[tools](tools.md), [phát triển](development.md), và
+[Agent API](../api/agent.md).

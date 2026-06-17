@@ -9,7 +9,6 @@ from .reasoners import FallbackReasoner, GeminiReasoner, HeuristicReasoner
 from .tools import (
     AnalysisTool,
     CalculatorTool,
-    DocumentSearchTool,
     SearchTool,
     TelemetryTool,
 )
@@ -25,7 +24,6 @@ SEARCH_KEYWORDS = (
     "phân bón",
     "giống",
 )
-DOCUMENT_KEYWORDS = ("tài liệu", "document", "hướng dẫn nội bộ")
 
 
 def _route_intents(question: str) -> list[str]:
@@ -37,8 +35,6 @@ def _route_intents(question: str) -> list[str]:
         result.append("analysis")
     if any(keyword in normalized for keyword in SEARCH_KEYWORDS):
         result.append("search")
-    if any(keyword in normalized for keyword in DOCUMENT_KEYWORDS):
-        result.append("document_search")
     if not result and any(character.isdigit() for character in normalized):
         result.append("calculator")
     return result
@@ -49,7 +45,6 @@ def create_default_agent() -> Agent:
     registry = ToolRegistry(
         [
             CalculatorTool(),
-            DocumentSearchTool(settings.agent_document_root_list),
             SearchTool(),
             TelemetryTool(),
             AnalysisTool(),

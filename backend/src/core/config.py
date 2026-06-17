@@ -39,7 +39,6 @@ class Settings(BaseSettings):
     agent_memory_max_characters: int = Field(
         alias="AGENT_MEMORY_MAX_CHARACTERS", default=12_000, gt=0
     )
-    agent_document_roots: str = Field(alias="AGENT_DOCUMENT_ROOTS", default="")
     agent_guardrails_enabled: bool = Field(
         alias="AGENT_GUARDRAILS_ENABLED", default=True
     )
@@ -55,7 +54,7 @@ class Settings(BaseSettings):
 
     app_name: str = Field(alias="APP_NAME", default="Autonomous Drones")
     app_domain: str = Field(alias="APP_DOMAIN", default="127.0.0.1")
-    app_env: Literal["development", "production", "testing"] = Field(
+    app_env: Literal["development", "production", "testing", "local"] = Field(
         alias="APP_ENV", default="production"
     )
     app_debug: bool = Field(alias="APP_DEBUG", default=False)
@@ -116,14 +115,6 @@ class Settings(BaseSettings):
             origin.strip().rstrip("/")
             for origin in self.frontend_origin.split(",")
             if origin.strip()
-        ]
-
-    @property
-    def agent_document_root_list(self) -> list[str]:
-        return [
-            root.strip()
-            for root in self.agent_document_roots.split(",")
-            if root.strip()
         ]
 
 

@@ -9,6 +9,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { agentQuestionSchema, type AgentQuestionFormValues } from "@/lib/validation";
 import { cn } from "@/lib/utils";
 import type { ChatMessage } from "@/types/agent";
+import MarkdownMessage from "./markdown-message";
 
 type AgentQuestionPanelProps = {
   isLoading: boolean;
@@ -170,7 +171,7 @@ function MessageRow({ message }: { message: ChatMessage }) {
       </span>
       <div className="min-w-0 flex-1">
         <p className="mb-2 text-sm font-bold text-foreground">AeroField</p>
-        <div className="whitespace-pre-wrap text-sm leading-6 text-secondary-foreground">{message.message}</div>
+        <MarkdownMessage content={message.message} />
       </div>
     </article>
   );

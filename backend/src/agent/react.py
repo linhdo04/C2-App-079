@@ -20,6 +20,7 @@ from .tracing import (
     agent_span,
     reset_trace_context,
     set_trace_context,
+    update_observation,
 )
 
 logger = structlog.get_logger(__name__)
@@ -280,19 +281,37 @@ class Executor:
         )
         started_at = time.perf_counter()
         for attempt in range(1, allowed_attempts + 1):
+            span_metadata = {
+                "tool": tool.name,
+                "iteration": iteration,
+                "attempt": attempt,
+                "timeout_seconds": self.timeout_seconds,
+            }
             try:
                 with agent_span(
                     "agent-tool",
-                    metadata={
-                        "tool": tool.name,
-                        "iteration": iteration,
-                        "attempt": attempt,
-                    },
-                ):
-                    observation = await asyncio.wait_for(
-                        tool.execute(validated_input, context),
-                        timeout=self.timeout_seconds,
-                    )
+                    metadata=span_metadata,
+                ) as span:
+                    try:
+                        observation = await asyncio.wait_for(
+                            tool.execute(validated_input, context),
+                            timeout=self.timeout_seconds,
+                        )
+                    except Exception as exc:
+                        update_observation(
+                            span,
+                            operation="agent-tool",
+                            metadata={
+                                **span_metadata,
+                                "error_type": type(exc).__name__,
+                                "timed_out": isinstance(exc, TimeoutError),
+                            },
+                            level="ERROR",
+                            status_message=(
+                                f"Tool '{tool.name}' failed with {type(exc).__name__}."
+                            ),
+                        )
+                        raise
                 duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
                 logger.info(
                     "agent_tool_completed",

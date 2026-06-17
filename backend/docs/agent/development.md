@@ -21,5 +21,4 @@ Các contract bắt buộc cần test khi thay đổi agent:
 - incremental token và persistence chỉ sau final answer.
 - safe error không lộ exception/observation.
 
-Gemini và Tavily cần key tương ứng. `AGENT_DOCUMENT_ROOTS` là danh sách
-comma-separated; giá trị rỗng làm document search trả safe “not configured”.
+Gemini và Tavily cần key tương ứng.
