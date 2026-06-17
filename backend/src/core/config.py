@@ -40,6 +40,18 @@ class Settings(BaseSettings):
         alias="AGENT_MEMORY_MAX_CHARACTERS", default=12_000, gt=0
     )
     agent_document_roots: str = Field(alias="AGENT_DOCUMENT_ROOTS", default="")
+    agent_guardrails_enabled: bool = Field(
+        alias="AGENT_GUARDRAILS_ENABLED", default=True
+    )
+    agent_guardrails_redact_pii: bool = Field(
+        alias="AGENT_GUARDRAILS_REDACT_PII", default=True
+    )
+    agent_guardrails_block_secrets: bool = Field(
+        alias="AGENT_GUARDRAILS_BLOCK_SECRETS", default=True
+    )
+    agent_guardrails_block_prompt_injection: bool = Field(
+        alias="AGENT_GUARDRAILS_BLOCK_PROMPT_INJECTION", default=True
+    )
 
     app_name: str = Field(alias="APP_NAME", default="Autonomous Drones")
     app_domain: str = Field(alias="APP_DOMAIN", default="127.0.0.1")

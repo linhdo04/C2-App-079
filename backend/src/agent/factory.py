@@ -2,6 +2,7 @@
 
 from core import settings
 
+from .guardrails import build_default_guardrails
 from .llm import llm
 from .react import Agent, AgentLoop, DoneOrMaxIterations, Executor, ToolRegistry
 from .reasoners import FallbackReasoner, GeminiReasoner, HeuristicReasoner
@@ -44,6 +45,7 @@ def _route_intents(question: str) -> list[str]:
 
 
 def create_default_agent() -> Agent:
+    guardrails = build_default_guardrails(settings)
     registry = ToolRegistry(
         [
             CalculatorTool(),
@@ -65,9 +67,11 @@ def create_default_agent() -> Agent:
                 timeout_seconds=settings.agent_tool_timeout_seconds,
                 max_retries=settings.agent_tool_max_retries,
                 backoff_seconds=settings.agent_tool_retry_backoff_seconds,
+                guardrails=guardrails,
             ),
             termination_condition=DoneOrMaxIterations(),
             max_iterations=settings.agent_max_iterations,
+            guardrails=guardrails,
         )
     )
 
