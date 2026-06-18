@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from fakes import FakePolicyLLM
 
 from agent import run_agent, stream_agent
 from agent.prompts import SYSTEM_PROMPT
@@ -28,7 +29,8 @@ from agent.reasoners import (
     LLMRoutedFallbackReasoner,
     LLMToolRouter,
 )
-from agent.tools import CalculatorTool, SearchInput, SearchTool
+from agent.tool_policy import SemanticToolPolicy
+from agent.tools import CalculatorTool, SearchInput, SearchTool, TelemetryInput
 from agent.tools.search import (
     FilteredSearchResult,
     RejectedSearchResult,
@@ -309,9 +311,8 @@ async def test_search_tool_filters_trace_regression_noise() -> None:
 
 
 def test_system_prompt_requires_search_source_links() -> None:
-    assert "numbered inline citations" in SYSTEM_PROMPT
-    assert "[Source title](URL)" in SYSTEM_PROMPT
-    assert "Nguồn tham khảo" in SYSTEM_PROMPT
+    assert "numbered inline citation links" in SYSTEM_PROMPT
+    assert "Do not add a separate" in SYSTEM_PROMPT
 
 
 def test_react_prompt_limits_thought() -> None:
@@ -476,9 +477,8 @@ async def test_llm_routed_fallback_formats_search_results_as_citations() -> None
     answer = await reasoner.finalize("Gợi ý chăm sóc hồ tiêu tại Gia Lai", memory)
 
     assert "Thông tin nổi bật" in answer
-    assert "Nguồn tham khảo" in answer
-    assert "[1]" in answer
-    assert "1. [HƯỚNG DẪN QUY TRÌNH TRỒNG VÀ CHĂM SÓC CÂY HỒ TIÊU]" in answer
+    assert "[1](https://example.com/ho-tieu)" in answer
+    assert "Nguồn tham khảo" not in answer
     assert "Title:" not in answer
     assert "URL:" not in answer
     assert "Snippet:" not in answer
@@ -535,6 +535,119 @@ async def test_provider_fallback_uses_llm_router_selected_search() -> None:
     assert decision.action == Action(
         tool="search",
         input={"query": "chăm sóc hồ tiêu mùa mưa", "max_results": 3},
+    )
+
+
+@pytest.mark.asyncio
+async def test_semantic_tool_policy_uses_user_telemetry_before_search() -> None:
+    async def handler(tool_input: Any, context: Any) -> str:
+        return "unused"
+
+    telemetry_tool = CallableTool(
+        "telemetry",
+        "Read recent temperature and humidity owned by the user.",
+        handler,
+        input_model=TelemetryInput,
+    )
+    search_tool = CallableTool(
+        "search",
+        "Search web",
+        handler,
+        input_model=SearchInput,
+    )
+    question = "Thời tiết tuần này ảnh hưởng thế nào đến lịch canh tác?"
+    llm = FakePolicyLLM(
+        {
+            "actions": [
+                {
+                    "tool": "telemetry",
+                    "input": {"limit": 50},
+                    "reason": "Needs first-party field conditions.",
+                },
+                {
+                    "tool": "search",
+                    "input": {
+                        "query": question,
+                        "max_results": 5,
+                    },
+                    "reason": "Needs external forecast.",
+                },
+            ],
+            "rationale": "Use telemetry before external forecast.",
+        }
+    )
+    policy = SemanticToolPolicy(llm, timeout_seconds=1)
+
+    decision = await policy.decide(
+        question,
+        InMemoryMemory(),
+        (search_tool, telemetry_tool),
+    )
+
+    assert decision == Action(tool="telemetry", input={"limit": 50})
+    assert llm.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_semantic_tool_policy_adds_forecast_search_after_telemetry() -> None:
+    async def handler(tool_input: Any, context: Any) -> str:
+        return "unused"
+
+    telemetry_tool = CallableTool(
+        "telemetry",
+        "Read recent temperature and humidity owned by the user.",
+        handler,
+        input_model=TelemetryInput,
+    )
+    search_tool = CallableTool(
+        "search",
+        "Search web",
+        handler,
+        input_model=SearchInput,
+    )
+    memory = InMemoryMemory()
+    memory.add(
+        ReActStep(
+            thought="Use telemetry.",
+            action=Action(tool="telemetry", input={"limit": 50}),
+            observation="Nhiệt độ mới nhất 31°C.",
+        )
+    )
+    question = "Thời tiết tuần này ảnh hưởng thế nào đến lịch canh tác?"
+    llm = FakePolicyLLM(
+        {
+            "actions": [
+                {
+                    "tool": "telemetry",
+                    "input": {"limit": 50},
+                    "reason": "Needs first-party field conditions.",
+                },
+                {
+                    "tool": "search",
+                    "input": {
+                        "query": question,
+                        "max_results": 5,
+                    },
+                    "reason": "Needs external forecast.",
+                },
+            ],
+            "rationale": "Use telemetry first, then forecast.",
+        }
+    )
+    policy = SemanticToolPolicy(llm, timeout_seconds=1)
+
+    decision = await policy.decide(
+        question,
+        memory,
+        (search_tool, telemetry_tool),
+    )
+
+    assert decision == Action(
+        tool="search",
+        input={
+            "query": question,
+            "max_results": 5,
+        },
     )
 
 

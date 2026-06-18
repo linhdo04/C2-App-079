@@ -178,6 +178,25 @@ class Reasoner(Protocol):
     async def finalize(self, goal: str, memory: Memory) -> str: ...
 
 
+class ToolPolicy(Protocol):
+    async def decide(
+        self,
+        goal: str,
+        memory: Memory,
+        tools: Sequence[Tool],
+    ) -> Action | None: ...
+
+
+def _was_action_called(action: Action, memory: Memory) -> bool:
+    call_key = f"{action.tool}:{json.dumps(action.input, sort_keys=True)}"
+    return any(
+        step.action is not None
+        and f"{step.action.tool}:{json.dumps(step.action.input, sort_keys=True)}"
+        == call_key
+        for step in memory.steps()
+    )
+
+
 @dataclass(frozen=True)
 class ToolExecutionResult:
     observation: str
@@ -427,6 +446,7 @@ class AgentLoop:
         termination_condition: TerminationCondition,
         max_iterations: int = 6,
         guardrails: GuardrailPipeline | None = None,
+        tool_policy: ToolPolicy | None = None,
     ) -> None:
         if max_iterations <= 0:
             raise ValueError("max_iterations must be positive")
@@ -435,6 +455,7 @@ class AgentLoop:
         self.termination_condition = termination_condition
         self.max_iterations = max_iterations
         self.guardrails = guardrails
+        self.tool_policy = tool_policy
 
     async def run(
         self,
@@ -503,9 +524,26 @@ class AgentLoop:
                 for iteration in range(1, self.max_iterations + 1):
                     last_iteration = iteration
                     try:
-                        decision = await self.reasoner.decide(
-                            safe_goal, active_memory, self.executor.registry.list()
+                        tools = self.executor.registry.list()
+                        policy_action = (
+                            await self.tool_policy.decide(
+                                safe_goal, active_memory, tools
+                            )
+                            if self.tool_policy is not None
+                            else None
                         )
+                        if policy_action is not None:
+                            decision = ReasoningDecision(
+                                thought=(
+                                    f"Policy selected {policy_action.tool}"
+                                    " for required evidence."
+                                ),
+                                action=policy_action,
+                            )
+                        else:
+                            decision = await self.reasoner.decide(
+                                safe_goal, active_memory, tools
+                            )
                     except Exception as exc:
                         logger.error(
                             "agent_reasoner_failed",
@@ -665,5 +703,7 @@ __all__ = [
     "TerminationReason",
     "Tool",
     "ToolContext",
+    "ToolPolicy",
     "ToolRegistry",
+    "_was_action_called",
 ]

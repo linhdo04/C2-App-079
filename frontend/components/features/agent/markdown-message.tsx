@@ -1,6 +1,30 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+const SOURCE_LINK_PATTERN = /^\s*(\d+)\.\s+\[[^\]]+\]\((https?:\/\/[^)\s]+)\)\s*$/gm;
+const SOURCE_SECTION_PATTERN = /^Nguồn tham khảo:\s*\n[\s\S]*/m;
+const INLINE_CITATION_PATTERN = /\[(\d+)\](?!\()/g;
+
+function prepareMarkdownContent(content: string) {
+  const sourceUrls = new Map<string, string>();
+
+  for (const match of content.matchAll(SOURCE_LINK_PATTERN)) {
+    sourceUrls.set(match[1], match[2]);
+  }
+
+  if (sourceUrls.size === 0) {
+    return content.replace(SOURCE_SECTION_PATTERN, "").trimEnd();
+  }
+
+  return content
+    .replace(INLINE_CITATION_PATTERN, (citation, sourceNumber: string) => {
+      const sourceUrl = sourceUrls.get(sourceNumber);
+      return sourceUrl === undefined ? citation : `[${sourceNumber}](${sourceUrl})`;
+    })
+    .replace(SOURCE_SECTION_PATTERN, "")
+    .trimEnd();
+}
+
 export default function MarkdownMessage({ content }: { content: string }) {
   return (
     <ReactMarkdown
@@ -49,7 +73,7 @@ export default function MarkdownMessage({ content }: { content: string }) {
         ul: ({ children }) => <ul className="my-3 list-disc space-y-2 pl-5">{children}</ul>,
       }}
     >
-      {content}
+      {prepareMarkdownContent(content)}
     </ReactMarkdown>
   );
 }

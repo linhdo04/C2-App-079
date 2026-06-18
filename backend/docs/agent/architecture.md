@@ -3,6 +3,7 @@
 `react.py` chứa core không phụ thuộc Gemini, database hay Tavily:
 
 - `AgentLoop`: iteration, chống lặp, termination và run summary.
+- `ToolPolicy`: source-priority classifier chạy trước reasoner mỗi iteration; trả `Action | None`.
 - `Reasoner`: provider-neutral planning/finalization.
 - `Tool`/`ToolRegistry`: capability và input schema.
 - `Executor`: validation, timeout, retry/backoff và safe observation.
