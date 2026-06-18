@@ -28,6 +28,8 @@ from agent.reasoners import (
     GeminiReasoner,
     LLMRoutedFallbackReasoner,
     LLMToolRouter,
+    _extract_server_retry_delay,
+    classify_llm_error,
 )
 from agent.tool_policy import SemanticToolPolicy
 from agent.tools import CalculatorTool, SearchInput, SearchTool, TelemetryInput
@@ -935,6 +937,194 @@ async def test_stream_agent_cancels_background_task_when_client_disconnects(
     await close_stream()
 
     await asyncio.wait_for(cancelled.wait(), timeout=1)
+
+
+def test_classify_llm_error_rate_limit_by_status_code() -> None:
+    result = classify_llm_error(RateLimitError())
+    assert result.error_code == "rate_limit"
+    assert result.http_status == 503
+
+
+def test_classify_llm_error_rate_limit_by_message() -> None:
+    result = classify_llm_error(RuntimeError("429 rate limit exceeded"))
+    assert result.error_code == "rate_limit"
+    assert result.http_status == 503
+
+
+def test_classify_llm_error_timeout() -> None:
+    result = classify_llm_error(TimeoutError())
+    assert result.error_code == "timeout"
+    assert result.http_status == 504
+
+
+def test_classify_llm_error_provider_unavailable() -> None:
+    class ServerError(Exception):
+        status_code = 503
+
+    result = classify_llm_error(ServerError())
+    assert result.error_code == "provider_unavailable"
+    assert result.http_status == 503
+
+
+def test_classify_llm_error_deadline_exceeded_maps_to_timeout() -> None:
+    class DeadlineError(Exception):
+        code = "DEADLINE_EXCEEDED"
+
+    result = classify_llm_error(DeadlineError())
+    assert result.error_code == "timeout"
+    assert result.http_status == 504
+
+
+def test_retryable_markers_cover_same_set_as_classify() -> None:
+    from agent.reasoners import (
+        _LLM_RETRYABLE_MESSAGE_MARKERS,
+        _RATE_LIMIT_MARKERS,
+        _UNAVAILABLE_MARKERS,
+    )
+
+    assert set(_LLM_RETRYABLE_MESSAGE_MARKERS) == set(_RATE_LIMIT_MARKERS) | set(
+        _UNAVAILABLE_MARKERS
+    )
+
+
+def test_classify_llm_error_connection() -> None:
+    result = classify_llm_error(ConnectionError("network unreachable"))
+    assert result.error_code == "service_unavailable"
+    assert result.http_status == 503
+
+
+def test_classify_llm_error_generic_falls_back_to_internal() -> None:
+    result = classify_llm_error(ValueError("unexpected value"))
+    assert result.error_code == "internal_error"
+    assert result.http_status == 500
+
+
+def test_classify_llm_error_message_does_not_leak_details() -> None:
+    result = classify_llm_error(RuntimeError("secret internal key abc123"))
+    assert "abc123" not in result.message
+    assert "secret" not in result.message
+
+
+def test_extract_server_retry_delay_from_human_readable_message() -> None:
+    exc = RuntimeError(
+        "429 RESOURCE_EXHAUSTED. Please retry in 28.823862733s after the quota resets."
+    )
+    assert _extract_server_retry_delay(exc) == pytest.approx(28.823862733)
+
+
+def test_extract_server_retry_delay_from_retry_info_detail() -> None:
+    exc = RuntimeError("{'retryDelay': '53s', '@type': 'google.rpc.RetryInfo'}")
+    assert _extract_server_retry_delay(exc) == pytest.approx(53.0)
+
+
+def test_extract_server_retry_delay_returns_none_when_absent() -> None:
+    assert _extract_server_retry_delay(RuntimeError("quota exceeded")) is None
+    assert _extract_server_retry_delay(RateLimitError()) is None
+
+
+@pytest.mark.asyncio
+async def test_ainvoke_llm_with_retry_uses_server_delay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retry should sleep for the server-suggested delay, not the fixed backoff."""
+    from agent.reasoners import _ainvoke_llm_with_retry
+
+    slept: list[float] = []
+
+    async def fake_sleep(s: float) -> None:
+        slept.append(s)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    calls = 0
+
+    async def invoke() -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("429 quota exceeded. Please retry in 42s.")
+        return "ok"
+
+    result = await _ainvoke_llm_with_retry(
+        invoke,
+        operation="test",
+        timeout_seconds=5,
+        max_retries=1,
+        backoff_seconds=0.5,
+    )
+
+    assert result == "ok"
+    assert calls == 2
+    assert len(slept) == 1
+    assert slept[0] == pytest.approx(42.0)
+
+
+@pytest.mark.asyncio
+async def test_ainvoke_llm_with_retry_caps_server_delay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Server delay above the cap should be clamped."""
+    from agent.reasoners import _ainvoke_llm_with_retry
+
+    slept: list[float] = []
+
+    async def fake_sleep(s: float) -> None:
+        slept.append(s)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    calls = 0
+
+    async def invoke() -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("429 quota exceeded. Please retry in 999s.")
+        return "ok"
+
+    await _ainvoke_llm_with_retry(
+        invoke,
+        operation="test",
+        timeout_seconds=5,
+        max_retries=1,
+        backoff_seconds=0.5,
+    )
+
+    assert slept[0] == pytest.approx(120.0)
+
+
+@pytest.mark.asyncio
+async def test_ainvoke_llm_with_retry_falls_back_to_backoff_without_server_delay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When no server delay hint, exponential backoff should be used."""
+    from agent.reasoners import _ainvoke_llm_with_retry
+
+    slept: list[float] = []
+
+    async def fake_sleep(s: float) -> None:
+        slept.append(s)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    calls = 0
+
+    async def invoke() -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RateLimitError()
+        return "ok"
+
+    await _ainvoke_llm_with_retry(
+        invoke,
+        operation="test",
+        timeout_seconds=5,
+        max_retries=1,
+        backoff_seconds=1.5,
+    )
+
+    assert slept[0] == pytest.approx(1.5)
 
 
 @pytest.mark.skipif(
