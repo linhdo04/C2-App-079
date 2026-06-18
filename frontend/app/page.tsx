@@ -34,7 +34,7 @@ export default function Home() {
               <span className="eyebrow">AI-powered field operations</span>
             </div>
             <h1 className="text-balance max-w-4xl text-5xl font-bold leading-[0.98] tracking-[-0.055em] sm:text-6xl lg:text-7xl">
-              Quan sát cánh đồnggggggggg.
+              Quan sát cánh đồng.
               <span className="block text-primary">Ra quyết định nhanh hơn.</span>
             </h1>
             <p className="mt-7 max-w-xl text-base leading-7 text-muted-foreground sm:text-lg">
