@@ -29,6 +29,16 @@ def verify_password(password: str, password_hash: str) -> bool:
     return _password_hash.verify(password, password_hash)
 
 
+def hash_secret(secret: str) -> str:
+    return _password_hash.hash(secret)
+
+
+def verify_secret(secret: str, secret_hash: str | None) -> bool:
+    if secret_hash is None or secret_hash == "":
+        return False
+    return _password_hash.verify(secret, secret_hash)
+
+
 def _create_token(
     user_id: int,
     token_type: str,
