@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from typing import Any
 
 import pytest
+from fakes import FakePolicyLLM
 from pydantic import BaseModel, Field
 
 from agent.react import (
@@ -22,6 +23,8 @@ from agent.react import (
     ToolContext,
     ToolRegistry,
 )
+from agent.tool_policy import SemanticToolPolicy
+from agent.tools import TelemetryInput
 
 
 class TextInput(BaseModel):
@@ -51,6 +54,7 @@ def create_loop(
     max_iterations: int = 4,
     max_retries: int = 1,
     backoff_seconds: float = 0,
+    tool_policy: Any | None = None,
 ) -> AgentLoop:
     return AgentLoop(
         reasoner=reasoner,
@@ -62,6 +66,7 @@ def create_loop(
         ),
         termination_condition=DoneOrMaxIterations(),
         max_iterations=max_iterations,
+        tool_policy=tool_policy,
     )
 
 
@@ -97,6 +102,48 @@ async def test_done_and_max_iterations_termination() -> None:
     ).run("goal")
     assert result.termination_reason == "max_iterations"
     assert result.final_response == "safe finalization"
+
+
+@pytest.mark.asyncio
+async def test_tool_policy_runs_before_reasoner_decision() -> None:
+    async def telemetry(tool_input: BaseModel, context: ToolContext) -> str:
+        data = TelemetryInput.model_validate(tool_input)
+        assert data.limit == 50
+        return "Nhiệt độ mới nhất 31°C."
+
+    telemetry_tool = CallableTool(
+        "telemetry",
+        "Read recent temperature and humidity owned by the user.",
+        telemetry,
+        input_model=TelemetryInput,
+    )
+    reasoner = SequenceReasoner(
+        [ReasoningDecision(thought="Complete", is_done=True, final_answer="answer")]
+    )
+
+    result = await create_loop(
+        reasoner,
+        [telemetry_tool],
+        tool_policy=SemanticToolPolicy(
+            FakePolicyLLM(
+                {
+                    "actions": [
+                        {
+                            "tool": "telemetry",
+                            "input": {"limit": 50},
+                            "reason": "Needs first-party field conditions.",
+                        }
+                    ],
+                    "rationale": "Use telemetry first.",
+                }
+            ),
+            timeout_seconds=1,
+        ),
+    ).run("Độ ẩm ruộng tôi đang thế nào?")
+
+    assert result.steps[0].action == Action(tool="telemetry", input={"limit": 50})
+    assert result.final_response == "answer"
+    assert reasoner.calls == 1
 
 
 @pytest.mark.asyncio

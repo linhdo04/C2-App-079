@@ -11,7 +11,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from .prompts import REACT_PROMPT, SYSTEM_PROMPT
-from .react import Action, Memory, Reasoner, ReasoningDecision, Tool
+from .react import Action, Memory, Reasoner, ReasoningDecision, Tool, _was_action_called
 from .tracing import agent_span, langchain_config, update_observation
 
 logger = structlog.get_logger(__name__)
@@ -469,16 +469,6 @@ def _default_search_action(
     return None if _was_action_called(action, memory) else action
 
 
-def _was_action_called(action: Action, memory: Memory) -> bool:
-    call_key = f"{action.tool}:{json.dumps(action.input, sort_keys=True)}"
-    return any(
-        step.action is not None
-        and f"{step.action.tool}:{json.dumps(step.action.input, sort_keys=True)}"
-        == call_key
-        for step in memory.steps()
-    )
-
-
 def _parse_fallback_route_decision(response: Any) -> FallbackRouteDecision:
     if isinstance(response, FallbackRouteDecision):
         return response
@@ -620,22 +610,19 @@ def _format_search_fallback_answer(
             break
 
     bullets = []
-    sources = []
     for index, result in enumerate(unique_results, start=1):
         snippet = _shorten(result.get("snippet", "").strip(), 260)
         title = result.get("title") or _source_label(result["url"])
         if snippet:
-            bullets.append(f"- {snippet} [{index}]")
+            bullets.append(f"- {snippet} [{index}]({result['url']})")
         else:
-            bullets.append(f"- Có nguồn liên quan: {title} [{index}]")
-        sources.append(f"{index}. [{title}]({result['url']})")
+            bullets.append(f"- Có nguồn liên quan: {title} [{index}]({result['url']})")
 
     return "\n\n".join(
         [
-            "Tôi tìm thấy một số nguồn web liên quan. Bạn nên dùng các nguồn "
-            "dưới đây để kiểm chứng trước khi áp dụng.",
+            "Tôi tìm thấy một số nguồn web liên quan. Các số trích dẫn trong "
+            "nội dung là đường dẫn nguồn để kiểm chứng.",
             "Thông tin nổi bật:\n" + "\n".join(bullets),
-            "Nguồn tham khảo:\n" + "\n".join(sources),
         ]
     )
 
