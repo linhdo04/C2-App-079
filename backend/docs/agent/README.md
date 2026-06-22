@@ -24,7 +24,8 @@ Loop chặn trùng `tool + canonical input` và ghi termination reason:
 Reasoner yêu cầu Gemini trả JSON qua native response schema và tự validate bằng
 Pydantic, kèm bước phục hồi parser cho raw provider response bị bọc/lẫn text
 nhưng vẫn chứa JSON hợp lệ. Nếu reasoner chính lỗi, fallback dùng Gemini router
-schema nhỏ để chọn tool; nếu router cũng lỗi thì mặc định dùng `search`.
+schema nhỏ để chọn tool; nếu router cũng lỗi thì lỗi được trả về API thay vì
+tự mặc định dùng `search`.
 
 ## Production tools
 
@@ -32,7 +33,8 @@ schema nhỏ để chọn tool; nếu router cũng lỗi thì mặc định dùn
 - `search`: Tavily, sau đó lọc/tóm tắt kết quả bằng Gemini trước khi đưa vào
   ReAct memory. Nếu filter lỗi hoặc timeout, tool degrade về formatter thô và
   ghi chú lỗi lọc.
-- `telemetry`: dữ liệu mission thuộc authenticated user.
+- `telemetry`: dữ liệu mission thuộc authenticated user; hỗ trợ lấy mẫu mới
+  nhất hoặc lọc theo khoảng thời gian tương đối/explicit.
 - `analysis`: ước tính sản lượng cây trồng.
 
 Mock file/web tools chỉ nằm trong `agent.tools.examples`, không được đăng ký
