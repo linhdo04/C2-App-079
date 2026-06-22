@@ -452,7 +452,7 @@ class LLMToolRouter:
 
 
 class LLMRoutedFallbackReasoner:
-    """Fallback reasoner that asks an LLM router before using generic search."""
+    """Fallback reasoner that asks an LLM router for a safe tool choice."""
 
     def __init__(self, router: LLMToolRouter | None) -> None:
         self._router = router
@@ -485,13 +485,7 @@ class LLMRoutedFallbackReasoner:
                     error_type=type(exc).__name__,
                     **_llm_error_metadata(exc),
                 )
-
-        action = _default_search_action(goal, tools, memory)
-        if action is not None:
-            return ReasoningDecision(
-                thought="Use search as the generic fallback evidence source.",
-                action=action,
-            )
+                raise
 
         return ReasoningDecision(
             thought="No fallback tool is available.",
@@ -547,28 +541,7 @@ def _action_from_route(
         return None
     action = Action(
         tool=tool.name,
-        input=validated_input.model_dump(mode="json"),
-    )
-    return None if _was_action_called(action, memory) else action
-
-
-def _default_search_action(
-    goal: str,
-    tools: Sequence[Tool],
-    memory: Memory,
-) -> Action | None:
-    search = next((tool for tool in tools if tool.name == "search"), None)
-    if search is None:
-        return None
-    try:
-        validated_input = search.input_model.model_validate(
-            {"query": goal, "max_results": 5}
-        )
-    except Exception:
-        return None
-    action = Action(
-        tool="search",
-        input=validated_input.model_dump(mode="json"),
+        input=validated_input.model_dump(mode="json", exclude_none=True),
     )
     return None if _was_action_called(action, memory) else action
 

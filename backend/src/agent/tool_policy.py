@@ -244,7 +244,10 @@ def _action_from_policy_call(
         validated_input = tool.input_model.model_validate(tool_call.input)
     except Exception:
         return None
-    return Action(tool=tool.name, input=validated_input.model_dump(mode="json"))
+    return Action(
+        tool=tool.name,
+        input=validated_input.model_dump(mode="json", exclude_none=True),
+    )
 
 
 __all__ = [

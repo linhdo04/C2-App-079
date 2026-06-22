@@ -3,6 +3,8 @@
 import asyncio
 import os
 from collections.abc import Sequence
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -41,10 +43,39 @@ from agent.tools.search import (
     SearchResultFilter,
     UsableClaim,
 )
+from agent.tools.telemetry import (
+    TelemetryTool,
+    _resolve_time_range,
+)
+from models.telemetry import TelemetryModel
 
 
 class RateLimitError(Exception):
     status_code = 429
+
+
+class FakeTelemetryResult:
+    def __init__(self, rows: list[Any]) -> None:
+        self.rows = rows
+
+    def all(self) -> list[Any]:
+        return self.rows
+
+    def one(self) -> Any:
+        return self.rows[0]
+
+
+class FakeTelemetrySession:
+    def __init__(self, responses: list[list[Any]]) -> None:
+        self.responses = responses
+        self.statements: list[Any] = []
+        self.execute_calls = 0
+
+    async def execute(self, statement: Any) -> FakeTelemetryResult:
+        self.statements.append(statement)
+        response = self.responses[self.execute_calls]
+        self.execute_calls += 1
+        return FakeTelemetryResult(response)
 
 
 @pytest.mark.asyncio
@@ -247,6 +278,206 @@ async def test_search_tool_drops_filter_results_with_unknown_urls() -> None:
     assert "Không tìm thấy nguồn đủ phù hợp" in result
     assert "Invented" not in result
     assert "https://example.com/invented" not in result
+
+
+def test_telemetry_time_range_resolves_relative_periods() -> None:
+    now = datetime(2026, 6, 22, 3, 0, tzinfo=UTC)
+
+    rolling_week = _resolve_time_range(
+        TelemetryInput(relative_range="last_7_days"),
+        "độ ẩm 1 tuần qua",
+        now=now,
+    )
+    previous_week = _resolve_time_range(
+        TelemetryInput(relative_range="previous_week"),
+        "độ ẩm tuần trước",
+        now=now,
+    )
+    previous_month = _resolve_time_range(
+        TelemetryInput(relative_range="previous_month"),
+        "nhiệt độ tháng trước",
+        now=now,
+    )
+
+    assert rolling_week is not None
+    assert rolling_week.start == datetime(2026, 6, 15, 3, 0, tzinfo=UTC)
+    assert rolling_week.end == now
+    assert rolling_week.label == "7 ngày qua"
+    assert previous_week is not None
+    assert previous_week.start == datetime(2026, 6, 14, 17, 0, tzinfo=UTC)
+    assert previous_week.end == datetime(2026, 6, 21, 17, 0, tzinfo=UTC)
+    assert previous_month is not None
+    assert previous_month.start == datetime(2026, 4, 30, 17, 0, tzinfo=UTC)
+    assert previous_month.end == datetime(2026, 5, 31, 17, 0, tzinfo=UTC)
+
+
+def test_telemetry_time_range_resolves_arbitrary_rolling_periods() -> None:
+    now = datetime(2026, 6, 23, 3, 0, tzinfo=UTC)
+
+    two_weeks = _resolve_time_range(TelemetryInput(), "độ ẩm 2 tuần qua", now=now)
+    fourteen_days = _resolve_time_range(
+        TelemetryInput(), "nhiệt độ 14 ngày gần đây", now=now
+    )
+    three_months = _resolve_time_range(
+        TelemetryInput(), "telemetry 3 tháng vừa qua", now=now
+    )
+
+    assert two_weeks is not None
+    assert two_weeks.start == datetime(2026, 6, 9, 3, 0, tzinfo=UTC)
+    assert two_weeks.end == now
+    assert two_weeks.label == "2 tuần qua"
+    assert fourteen_days is not None
+    assert fourteen_days.start == datetime(2026, 6, 9, 3, 0, tzinfo=UTC)
+    assert fourteen_days.label == "14 ngày qua"
+    assert three_months is not None
+    assert three_months.start == datetime(2026, 3, 23, 3, 0, tzinfo=UTC)
+    assert three_months.label == "3 tháng qua"
+
+
+def test_telemetry_time_range_resolves_current_week_and_month() -> None:
+    now = datetime(2026, 6, 23, 3, 0, tzinfo=UTC)
+
+    current_week = _resolve_time_range(
+        TelemetryInput(relative_range="current_week"),
+        "telemetry tuần này",
+        now=now,
+    )
+    current_month = _resolve_time_range(
+        TelemetryInput(),
+        "telemetry tháng này",
+        now=now,
+    )
+
+    assert current_week is not None
+    assert current_week.start == datetime(2026, 6, 21, 17, 0, tzinfo=UTC)
+    assert current_week.end == now
+    assert current_week.label == "tuần này"
+    assert current_month is not None
+    assert current_month.start == datetime(2026, 5, 31, 17, 0, tzinfo=UTC)
+    assert current_month.end == now
+    assert current_month.label == "tháng này"
+
+
+def test_telemetry_time_range_parses_explicit_date_range() -> None:
+    resolved = _resolve_time_range(
+        TelemetryInput(),
+        "Phân tích telemetry từ 01/06/2026 đến 07/06/2026",
+    )
+
+    assert resolved is not None
+    assert resolved.start == datetime(2026, 5, 31, 17, 0, tzinfo=UTC)
+    assert resolved.end == datetime(2026, 6, 7, 17, 0, tzinfo=UTC)
+    assert resolved.label == "từ 2026-06-01 đến 2026-06-07"
+
+
+def test_telemetry_time_range_parses_vietnamese_long_date_range() -> None:
+    resolved = _resolve_time_range(
+        TelemetryInput(),
+        "Phân tích telemetry từ ngày 1 tháng 6 năm 2026 đến ngày 7 tháng 6 năm 2026",
+    )
+
+    assert resolved is not None
+    assert resolved.start == datetime(2026, 5, 31, 17, 0, tzinfo=UTC)
+    assert resolved.end == datetime(2026, 6, 7, 17, 0, tzinfo=UTC)
+    assert resolved.label == "từ 2026-06-01 đến 2026-06-07"
+
+
+def test_telemetry_time_range_treats_naive_datetimes_as_vietnam_time() -> None:
+    resolved = _resolve_time_range(
+        TelemetryInput(
+            start_time=datetime(2026, 6, 1),
+            end_time=datetime(2026, 6, 2),
+        ),
+        "telemetry",
+    )
+
+    assert resolved is not None
+    assert resolved.start == datetime(2026, 5, 31, 17, 0, tzinfo=UTC)
+    assert resolved.end == datetime(2026, 6, 1, 17, 0, tzinfo=UTC)
+
+
+def test_telemetry_input_rejects_invalid_explicit_range() -> None:
+    with pytest.raises(ValueError):
+        TelemetryInput(
+            start_time=datetime(2026, 6, 8, tzinfo=UTC),
+            end_time=datetime(2026, 6, 7, tzinfo=UTC),
+        )
+
+
+@pytest.mark.asyncio
+async def test_telemetry_tool_filters_and_summarizes_time_range(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent.react import ToolContext
+
+    latest_row = (
+        TelemetryModel(
+            id=2,
+            iot_node_id=1,
+            timestamp=datetime(2026, 6, 7, 8, 0, tzinfo=UTC),
+            temperature_celsius=32,
+            humidity_percent=70,
+        ),
+        "Cảm biến 01",
+        "Ruộng lúa",
+    )
+    session = FakeTelemetrySession(
+        [
+            [(2, 30, 28, 32, 75, 70, 80)],
+            [latest_row],
+        ]
+    )
+
+    @asynccontextmanager
+    async def fake_db_session() -> Any:
+        yield session
+
+    monkeypatch.setattr("agent.tools.telemetry.db_session", fake_db_session)
+
+    result = await TelemetryTool().execute(
+        TelemetryInput(
+            start_time=datetime(2026, 6, 1, tzinfo=UTC),
+            end_time=datetime(2026, 6, 8, tzinfo=UTC),
+        ),
+        ToolContext(goal="telemetry tuần đầu tháng 6", user_id=7),
+    )
+
+    aggregate_statement, latest_statement = session.statements
+    statement_text = str(aggregate_statement)
+    params = aggregate_statement.compile().params
+    assert "telemetry.timestamp >= " in statement_text
+    assert "telemetry.timestamp < " in statement_text
+    assert aggregate_statement._limit_clause is None
+    assert latest_statement._limit_clause.value == 1
+    assert datetime(2026, 6, 1, tzinfo=UTC) in params.values()
+    assert datetime(2026, 6, 8, tzinfo=UTC) in params.values()
+    assert "Phân tích 2 mẫu telemetry trong" in result
+    assert "trung bình 30.0°C" in result
+    assert "thấp nhất 28.0°C; cao nhất 32.0°C" in result
+    assert "trung bình 75.0%" in result
+
+
+@pytest.mark.asyncio
+async def test_telemetry_tool_reports_empty_time_range(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent.react import ToolContext
+
+    session = FakeTelemetrySession([[(0, None, None, None, None, None, None)], []])
+
+    @asynccontextmanager
+    async def fake_db_session() -> Any:
+        yield session
+
+    monkeypatch.setattr("agent.tools.telemetry.db_session", fake_db_session)
+
+    result = await TelemetryTool().execute(
+        TelemetryInput(relative_range="last_30_days"),
+        ToolContext(goal="độ ẩm 1 tháng qua", user_id=7),
+    )
+
+    assert "trong 30 ngày qua" in result
+    assert session.statements[0]._limit_clause is None
 
 
 @pytest.mark.asyncio
@@ -541,6 +772,50 @@ async def test_provider_fallback_uses_llm_router_selected_search() -> None:
 
 
 @pytest.mark.asyncio
+async def test_provider_fallback_propagates_router_failure() -> None:
+    class FailingReasoner:
+        async def decide(
+            self,
+            goal: str,
+            memory: Memory,
+            tools: Sequence[Tool],
+        ) -> ReasoningDecision:
+            raise TimeoutError
+
+        async def finalize(self, goal: str, memory: Memory) -> str:
+            raise TimeoutError
+
+    class FailingRouter(LLMToolRouter):
+        def __init__(self) -> None:
+            pass
+
+        async def route(
+            self,
+            goal: str,
+            memory: Memory,
+            tools: Sequence[Tool],
+        ) -> FallbackRouteDecision:
+            raise TimeoutError
+
+    async def handler(tool_input: Any, context: Any) -> str:
+        return "unused"
+
+    search_tool = CallableTool(
+        "search",
+        "Search web",
+        handler,
+        input_model=SearchInput,
+    )
+    reasoner = FallbackReasoner(
+        FailingReasoner(),
+        LLMRoutedFallbackReasoner(FailingRouter()),
+    )
+
+    with pytest.raises(TimeoutError):
+        await reasoner.decide("khuyến nghị tưới tiêu", InMemoryMemory(), (search_tool,))
+
+
+@pytest.mark.asyncio
 async def test_semantic_tool_policy_uses_user_telemetry_before_search() -> None:
     async def handler(tool_input: Any, context: Any) -> str:
         return "unused"
@@ -588,6 +863,40 @@ async def test_semantic_tool_policy_uses_user_telemetry_before_search() -> None:
 
     assert decision == Action(tool="telemetry", input={"limit": 50})
     assert llm.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_semantic_tool_policy_accepts_telemetry_relative_range() -> None:
+    async def handler(tool_input: Any, context: Any) -> str:
+        return "unused"
+
+    telemetry_tool = CallableTool(
+        "telemetry",
+        "Read temperature and humidity owned by the user with time filters.",
+        handler,
+        input_model=TelemetryInput,
+    )
+    question = "Độ ẩm 1 tuần qua biến động thế nào?"
+    llm = FakePolicyLLM(
+        {
+            "actions": [
+                {
+                    "tool": "telemetry",
+                    "input": {"relative_range": "last_7_days"},
+                    "reason": "Needs first-party telemetry over the requested period.",
+                }
+            ],
+            "rationale": "Use telemetry with the requested period.",
+        }
+    )
+    policy = SemanticToolPolicy(llm, timeout_seconds=1)
+
+    decision = await policy.decide(question, InMemoryMemory(), (telemetry_tool,))
+
+    assert decision == Action(
+        tool="telemetry",
+        input={"limit": 50, "relative_range": "last_7_days"},
+    )
 
 
 @pytest.mark.asyncio
@@ -729,9 +1038,7 @@ async def test_llm_routed_fallback_uses_calculator_when_router_input_is_valid() 
 
 
 @pytest.mark.asyncio
-async def test_llm_routed_fallback_defaults_to_search_for_invalid_router_input() -> (
-    None
-):
+async def test_llm_routed_fallback_returns_error_for_invalid_router_input() -> None:
     class FakeRouter(LLMToolRouter):
         def __init__(self) -> None:
             pass
@@ -748,6 +1055,8 @@ async def test_llm_routed_fallback_defaults_to_search_for_invalid_router_input()
                 reason="Invalid calculator input.",
             )
 
+    reasoner = LLMRoutedFallbackReasoner(FakeRouter())
+
     async def handler(tool_input: Any, context: Any) -> str:
         return "unused"
 
@@ -757,20 +1066,18 @@ async def test_llm_routed_fallback_defaults_to_search_for_invalid_router_input()
         handler,
         input_model=SearchInput,
     )
-    reasoner = LLMRoutedFallbackReasoner(FakeRouter())
 
     decision = await reasoner.decide(
         "thông tin canh tác mới", InMemoryMemory(), (search_tool, CalculatorTool())
     )
 
-    assert decision.action == Action(
-        tool="search",
-        input={"query": "thông tin canh tác mới", "max_results": 5},
-    )
+    assert decision.is_done is True
+    assert decision.final_answer is not None
+    assert "Không thể thu thập dữ liệu" in decision.final_answer
 
 
 @pytest.mark.asyncio
-async def test_llm_routed_fallback_defaults_to_search_when_router_fails() -> None:
+async def test_llm_routed_fallback_raises_when_router_fails() -> None:
     class FailingRouter(LLMToolRouter):
         def __init__(self) -> None:
             pass
@@ -782,6 +1089,8 @@ async def test_llm_routed_fallback_defaults_to_search_when_router_fails() -> Non
             tools: Sequence[Tool],
         ) -> FallbackRouteDecision:
             raise TimeoutError
+
+    reasoner = LLMRoutedFallbackReasoner(FailingRouter())
 
     async def handler(tool_input: Any, context: Any) -> str:
         return "unused"
@@ -792,20 +1101,13 @@ async def test_llm_routed_fallback_defaults_to_search_when_router_fails() -> Non
         handler,
         input_model=SearchInput,
     )
-    reasoner = LLMRoutedFallbackReasoner(FailingRouter())
 
-    decision = await reasoner.decide(
-        "khuyến nghị tưới tiêu", InMemoryMemory(), (search_tool,)
-    )
-
-    assert decision.action == Action(
-        tool="search",
-        input={"query": "khuyến nghị tưới tiêu", "max_results": 5},
-    )
+    with pytest.raises(TimeoutError):
+        await reasoner.decide("khuyến nghị tưới tiêu", InMemoryMemory(), (search_tool,))
 
 
 @pytest.mark.asyncio
-async def test_llm_routed_fallback_without_search_returns_clear_error() -> None:
+async def test_llm_routed_fallback_without_search_raises_router_error() -> None:
     class FailingRouter(LLMToolRouter):
         def __init__(self) -> None:
             pass
@@ -820,14 +1122,8 @@ async def test_llm_routed_fallback_without_search_returns_clear_error() -> None:
 
     reasoner = LLMRoutedFallbackReasoner(FailingRouter())
 
-    decision = await reasoner.decide(
-        "câu hỏi mở", InMemoryMemory(), (CalculatorTool(),)
-    )
-
-    assert decision.is_done is True
-    assert decision.final_answer is not None
-    assert "fallback router" in decision.final_answer
-    assert "Tôi chưa có đủ dữ liệu" not in decision.final_answer
+    with pytest.raises(TimeoutError):
+        await reasoner.decide("câu hỏi mở", InMemoryMemory(), (CalculatorTool(),))
 
 
 @pytest.mark.asyncio

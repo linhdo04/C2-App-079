@@ -45,7 +45,7 @@ export function ReadingsTable({ readings }: ReadingsTableProps) {
                 {formatMetric(reading.temperature_celsius, "°C")}
               </TableCell>
               <TableCell className="px-2 py-4 font-bold text-[#7dd7fa]">
-                {formatMetric(reading.humidity_percent, "%", 0)}
+                {formatMetric(reading.humidity_percent, "%")}
               </TableCell>
             </TableRow>
           ))}

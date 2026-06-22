@@ -132,17 +132,14 @@ Gemini có thể:
 - trả `is_done=true` với final answer,
 - hoặc chọn một action với tool name và input JSON.
 
-Fallback heuristic chỉ chọn tool theo keyword:
+Nếu primary Gemini reasoner lỗi, fallback router dùng một schema nhỏ để chọn
+tool từ catalog. Nếu router cũng lỗi, lỗi được trả về API/SSE để user biết hệ
+thống AI đang gián đoạn; agent không tự mặc định chạy `search`.
 
-| Keyword trong câu hỏi | Tool fallback |
-| --- | --- |
-| `nhiệt độ`, `độ ẩm`, `cảm biến`, `telemetry`, `môi trường` | `telemetry` |
-| `diện tích`, `năng suất`, `sản lượng`, `tấn/ha`, `thu hoạch` | `analysis` |
-| `giá`, `thị trường`, `kỹ thuật`, `sâu bệnh`, `mới nhất`, `phân bón`, `giống` | `search` |
-| Có chữ số nhưng không match tool khác | `calculator` |
-
-Nếu không match keyword nào và Gemini không dùng được, fallback sẽ trả lời rằng
-chưa có đủ dữ liệu để trả lời an toàn.
+Loop cũng có guard deterministic cho telemetry: nếu telemetry đã trả “không có
+dữ liệu” thì agent không được dùng `search` để thay thế dữ liệu sensor, trừ khi
+user hỏi rõ nguồn bên ngoài như web/dự báo/thời tiết hiện tại. Với ngày mơ hồ
+như “ngày 18” nhưng thiếu tháng/năm, agent hỏi lại thay vì tự đoán ngày.
 
 ## Case: câu hỏi tính toán
 
@@ -194,6 +191,8 @@ reasoner chọn telemetry
 Nếu thiếu `user_id`, tool trả thông báo không thể truy vấn telemetry. Nếu không
 có dữ liệu, tool trả thông báo không có dữ liệu nhiệt độ/độ ẩm cho user.
 Observation luôn nhắc dữ liệu telemetry là lịch sử, không phải dự báo thời tiết.
+Nếu user không yêu cầu nguồn ngoài, agent dừng ở thông báo thiếu dữ liệu này và
+không tự tìm web để bù.
 
 ## Case: câu hỏi phân tích sản lượng
 
@@ -240,9 +239,9 @@ câu hỏi về "tài liệu nội bộ" hoặc "hướng dẫn nội bộ"
 -> nếu không có dữ liệu phù hợp thì phải nói rõ giới hạn
 ```
 
-Fallback heuristic hiện không route riêng cho tài liệu nội bộ. Nếu câu hỏi không
-chứa keyword của `search`, `telemetry`, `analysis` hoặc chữ số, fallback sẽ trả
-lời rằng chưa đủ dữ liệu an toàn.
+Fallback router hiện không route riêng cho tài liệu nội bộ. Nếu router không
+chọn được tool hợp lệ, fallback sẽ trả lời rằng chưa đủ dữ liệu an toàn. Nếu
+router lỗi, API/SSE sẽ trả thông báo lỗi thay vì chạy một tool thay thế.
 
 ## Case: tool input không hợp lệ hoặc tool không tồn tại
 
