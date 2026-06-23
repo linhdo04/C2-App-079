@@ -33,7 +33,7 @@ _RETRY_DELAY_PATTERNS = (
     re.compile(r"retry in (\d+(?:\.\d+)?)s", re.IGNORECASE),
     re.compile(r"""['"]retryDelay['"]\s*:\s*['"](\d+(?:\.\d+)?)s['"]"""),
 )
-_MAX_SERVER_RETRY_DELAY_SECONDS = 120.0
+_MAX_SERVER_RETRY_DELAY_SECONDS = 5.0
 
 
 """Return the server-suggested retry delay (seconds) embedded in a 429 body, or None."""
@@ -78,7 +78,9 @@ async def _ainvoke_llm_with_retry(
             if should_retry:
                 if server_delay is not None:
                     sleep_seconds: float = min(
-                        server_delay, _MAX_SERVER_RETRY_DELAY_SECONDS
+                        server_delay,
+                        timeout_seconds,
+                        _MAX_SERVER_RETRY_DELAY_SECONDS,
                     )
                 else:
                     sleep_seconds = backoff_seconds * (2 ** (attempt - 1))
