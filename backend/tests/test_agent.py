@@ -1319,7 +1319,7 @@ def test_extract_server_retry_delay_returns_none_when_absent() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ainvoke_llm_with_retry_uses_server_delay(
+async def test_ainvoke_llm_with_retry_uses_server_delay_under_cap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Retry should sleep for the server-suggested delay, not the fixed backoff."""
@@ -1338,7 +1338,7 @@ async def test_ainvoke_llm_with_retry_uses_server_delay(
         nonlocal calls
         calls += 1
         if calls == 1:
-            raise RuntimeError("429 quota exceeded. Please retry in 42s.")
+            raise RuntimeError("429 quota exceeded. Please retry in 2s.")
         return "ok"
 
     result = await _ainvoke_llm_with_retry(
@@ -1352,7 +1352,7 @@ async def test_ainvoke_llm_with_retry_uses_server_delay(
     assert result == "ok"
     assert calls == 2
     assert len(slept) == 1
-    assert slept[0] == pytest.approx(42.0)
+    assert slept[0] == pytest.approx(2.0)
 
 
 @pytest.mark.asyncio
@@ -1386,7 +1386,41 @@ async def test_ainvoke_llm_with_retry_caps_server_delay(
         backoff_seconds=0.5,
     )
 
-    assert slept[0] == pytest.approx(120.0)
+    assert slept[0] == pytest.approx(5.0)
+
+
+@pytest.mark.asyncio
+async def test_ainvoke_llm_with_retry_caps_server_delay_to_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Server delay should never exceed the per-call request timeout."""
+    from agent.reasoners import _ainvoke_llm_with_retry
+
+    slept: list[float] = []
+
+    async def fake_sleep(s: float) -> None:
+        slept.append(s)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    calls = 0
+
+    async def invoke() -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("429 quota exceeded. Please retry in 4s.")
+        return "ok"
+
+    await _ainvoke_llm_with_retry(
+        invoke,
+        operation="test",
+        timeout_seconds=1.5,
+        max_retries=1,
+        backoff_seconds=0.5,
+    )
+
+    assert slept[0] == pytest.approx(1.5)
 
 
 @pytest.mark.asyncio
