@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
-import { AuthRoute } from "@/components/features/auth/auth-route";
+import { redirect } from "next/navigation";
 
 export const metadata: Metadata = {
-  title: "Đăng ký | AeroField",
-  description: "Tạo tài khoản để sử dụng AI Agent của AeroField.",
+  title: "Đăng nhập | AeroField",
+  description: "Đăng nhập để sử dụng AI Agent của AeroField.",
 };
 
 export default function RegisterPage() {
-  return <AuthRoute mode="register" />;
+  redirect("/login");
 }

@@ -24,16 +24,16 @@ function Nav() {
         </>
       ) : (
         <>
-          <Button
+          {/* <Button
             asChild
             variant="ghost"
             className="hidden md:inline-flex"
           >
             <Link href="/login">Đăng nhập</Link>
-          </Button>
+          </Button> */}
           <Button asChild>
-            <Link href="/register">
-              Bắt đầu
+            <Link href="/login">
+              Đăng nhập
               <ArrowRight />
             </Link>
           </Button>
