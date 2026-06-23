@@ -263,6 +263,13 @@ def _should_skip_tool_policy_after_terminal_telemetry(
     )
 
 
+def _has_point_telemetry_query(action: Action) -> bool:
+    query_kinds = action.input.get("query_kinds")
+    return isinstance(query_kinds, list) and any(
+        query_kind in {"temperature_at", "humidity_at"} for query_kind in query_kinds
+    )
+
+
 def _decision_guard_response(
     goal: str,
     action: Action,
@@ -279,7 +286,11 @@ def _decision_guard_response(
             "telemetry nội bộ khi bạn chưa yêu cầu nguồn bên ngoài. Bạn có thể "
             "chọn khoảng thời gian khác hoặc kiểm tra thiết bị đã gửi dữ liệu chưa."
         )
-    if action.tool == "telemetry" and _has_ambiguous_day_only_date(goal):
+    if (
+        action.tool == "telemetry"
+        and _has_ambiguous_day_only_date(goal)
+        and not _has_point_telemetry_query(action)
+    ):
         return (
             "Bạn vui lòng cung cấp đầy đủ ngày, tháng và năm cho khoảng thời gian "
             "cần xem telemetry, ví dụ: 18/06/2026. Câu hỏi hiện chỉ nêu “ngày 18” "

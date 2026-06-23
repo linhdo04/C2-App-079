@@ -19,11 +19,14 @@ from models.telemetry import TelemetryModel
 from ..react import Tool, ToolContext
 
 LOCAL_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
+POINT_LOOKUP_TOLERANCE = timedelta(minutes=5)
 TelemetryQueryKind = Literal[
     "temperature_max",
     "temperature_min",
+    "temperature_at",
     "humidity_max",
     "humidity_min",
+    "humidity_at",
 ]
 RelativeTelemetryRange = Literal[
     "last_7_days",
@@ -35,6 +38,18 @@ RelativeTelemetryRange = Literal[
     "today",
     "yesterday",
 ]
+TelemetryTemporalIntentKind = Literal["rolling"]
+TelemetryTemporalUnit = Literal["minute", "hour", "day", "week", "month"]
+
+
+class TelemetryTemporalIntent(BaseModel):
+    kind: TelemetryTemporalIntentKind = Field(
+        description="Temporal intent type. Use rolling for N units ago/from now."
+    )
+    count: int = Field(ge=1, le=1000, description="Number of time units.")
+    unit: TelemetryTemporalUnit = Field(
+        description="Rolling range unit: minute, hour, day, week, or month."
+    )
 
 
 class TelemetryInput(BaseModel):
@@ -45,10 +60,19 @@ class TelemetryInput(BaseModel):
         max_length=4,
         description=(
             "Specific telemetry facts to query. Use temperature_max/min or "
-            "humidity_max/min when the user asks for highest/lowest values."
+            "humidity_max/min when the user asks for highest/lowest values. "
+            "Use temperature_at or humidity_at when the user asks for the value "
+            "at a specific time."
         ),
     )
     relative_range: RelativeTelemetryRange | None = None
+    temporal_intent: TelemetryTemporalIntent | None = Field(
+        default=None,
+        description=(
+            "Structured temporal intent extracted from the user's request. Use for "
+            "arbitrary rolling ranges like last 2 hours or last 30 minutes."
+        ),
+    )
     start_time: datetime | None = None
     end_time: datetime | None = None
 
@@ -58,6 +82,7 @@ class TelemetryInput(BaseModel):
             self.start_time is not None
             and self.end_time is not None
             and _to_utc(self.start_time) >= _to_utc(self.end_time)
+            and not _has_point_query(self.query_kinds)
         ):
             raise ValueError("start_time must be before end_time")
         if self.query_kinds is not None:
@@ -87,7 +112,7 @@ class TelemetryTool(Tool):
     name = "telemetry"
     description = (
         "Read temperature and humidity owned by the user. Supports recent samples, "
-        "relative_range, start_time, and end_time filters."
+        "relative_range, temporal_intent, start_time, and end_time filters."
     )
     input_model = TelemetryInput
     retryable = True
@@ -97,10 +122,19 @@ class TelemetryTool(Tool):
         if context.user_id is None:
             return "Không thể truy vấn telemetry khi thiếu thông tin người dùng."
         time_range = _resolve_time_range(data, context.goal)
-        if data.query_kinds is not None and time_range is None:
+        if (
+            data.query_kinds is not None
+            and time_range is None
+            and any(not _is_point_query(query_kind) for query_kind in data.query_kinds)
+        ):
             time_range = _relative_range("today")
         if data.query_kinds is not None:
-            return await _execute_specific_queries(data, context.user_id, time_range)
+            return await _execute_specific_queries(
+                data,
+                context.user_id,
+                time_range,
+                context.goal,
+            )
         statement = _latest_telemetry_statement(context.user_id, time_range)
         if time_range is None:
             statement = statement.limit(data.limit)
@@ -188,17 +222,32 @@ async def _execute_specific_queries(
     data: TelemetryInput,
     user_id: int,
     time_range: TelemetryTimeRange | None,
+    goal: str,
 ) -> str:
     assert data.query_kinds is not None
+    point_time = _resolve_point_lookup_time(goal)
+    if point_time is None and data.start_time is not None:
+        point_time = _to_utc(data.start_time)
     lines = [
         (
-            f"Truy vấn telemetry theo chỉ số trong {time_range.label}:"
+            f"Truy vấn telemetry tại thời điểm {_format_local_datetime(point_time)}:"
+            if point_time is not None
+            else f"Truy vấn telemetry theo chỉ số trong {time_range.label}:"
             if time_range is not None
             else f"Truy vấn telemetry theo chỉ số trong {data.limit} mẫu mới nhất:"
         )
     ]
     async with db_session() as session:
         for query_kind in data.query_kinds:
+            if _is_point_query(query_kind):
+                if point_time is None:
+                    lines.append(_missing_point_time_summary(query_kind))
+                    continue
+                statement = _point_telemetry_statement(user_id, point_time, query_kind)
+                rows = list((await session.execute(statement.limit(1))).all())
+                lines.append(_point_query_summary(query_kind, rows, point_time))
+                continue
+
             statement = _specific_telemetry_statement(user_id, time_range, query_kind)
             if time_range is None:
                 statement = statement.limit(data.limit)
@@ -250,6 +299,46 @@ def _specific_telemetry_statement(
         )
         .order_by(
             order_by_value,
+            cast(Any, TelemetryModel.timestamp).desc(),
+            cast(Any, TelemetryModel.id).desc(),
+        )
+    )
+    return statement
+
+
+def _point_telemetry_statement(
+    user_id: int,
+    point_time: datetime,
+    query_kind: TelemetryQueryKind,
+) -> Any:
+    field = _query_field(query_kind)
+    start = point_time - POINT_LOOKUP_TOLERANCE
+    end = point_time + POINT_LOOKUP_TOLERANCE
+    distance_seconds = func.abs(
+        func.extract("epoch", cast(Any, TelemetryModel.timestamp) - point_time)
+    )
+    statement = (
+        select(
+            TelemetryModel,
+            cast(Any, IoTNodeModel.name),
+            cast(Any, MissionModel.name),
+        )
+        .join(IoTNodeModel, cast(Any, TelemetryModel.iot_node_id == IoTNodeModel.id))
+        .join(MissionModel, cast(Any, IoTNodeModel.mission_id == MissionModel.id))
+        .where(
+            *_telemetry_filters(user_id, None),
+            cast(ColumnElement[bool], cast(Any, field).is_not(None)),
+            cast(
+                ColumnElement[bool],
+                cast(Any, TelemetryModel.timestamp) >= start,
+            ),
+            cast(
+                ColumnElement[bool],
+                cast(Any, TelemetryModel.timestamp) <= end,
+            ),
+        )
+        .order_by(
+            distance_seconds.asc(),
             cast(Any, TelemetryModel.timestamp).desc(),
             cast(Any, TelemetryModel.id).desc(),
         )
@@ -348,6 +437,9 @@ def _resolve_time_range(
             label=_range_label(start, end),
         )
 
+    if data.temporal_intent is not None:
+        return _temporal_intent_range(data.temporal_intent, now=now)
+
     if data.relative_range is not None:
         return _relative_range(data.relative_range, now=now)
 
@@ -364,6 +456,36 @@ def _resolve_time_range(
         return _relative_range(parsed_relative, now=now)
 
     return None
+
+
+def _temporal_intent_range(
+    temporal_intent: TelemetryTemporalIntent,
+    *,
+    now: datetime | None = None,
+) -> TelemetryTimeRange:
+    current = _to_utc(now or get_utc_now()).astimezone(LOCAL_TIMEZONE)
+    count = temporal_intent.count
+    unit = temporal_intent.unit
+    if unit == "minute":
+        start = current - timedelta(minutes=count)
+        label_unit = "phút"
+    elif unit == "hour":
+        start = current - timedelta(hours=count)
+        label_unit = "giờ"
+    elif unit == "day":
+        start = current - timedelta(days=count)
+        label_unit = "ngày"
+    elif unit == "week":
+        start = current - timedelta(weeks=count)
+        label_unit = "tuần"
+    else:
+        start = _shift_months(current, -count)
+        label_unit = "tháng"
+    return TelemetryTimeRange(
+        start=start.astimezone(UTC),
+        end=current.astimezone(UTC),
+        label=f"{count} {label_unit} qua",
+    )
 
 
 def _relative_range(
@@ -470,28 +592,64 @@ def _parse_rolling_count_range(
 ) -> TelemetryTimeRange | None:
     normalized = " ".join(goal.casefold().split())
     match = re.search(
-        r"\b(?P<count>\d{1,4})\s*(?P<unit>ngày|tuần|tháng)\s*"
-        r"(?:qua|gần đây|vừa qua)\b",
+        r"\b(?P<count>\d{1,4}|một|hai|ba|bốn|bon|năm|nam|sáu|sau|bảy|bay|"
+        r"tám|tam|chín|chin|mười|muoi)\s*"
+        r"(?P<unit>phút|giờ|tiếng|ngày|tuần|tháng)\s*"
+        r"(?:qua|gần đây|vừa qua|vừa rồi)\b",
         normalized,
     )
     if match is None:
         return None
-    count = int(match.group("count"))
+    count = _parse_vietnamese_count(match.group("count"))
     if count <= 0:
         return None
     unit = match.group("unit")
     current = _to_utc(now or get_utc_now()).astimezone(LOCAL_TIMEZONE)
-    if unit == "ngày":
+    if unit == "phút":
+        start = current - timedelta(minutes=count)
+        label_unit = "phút"
+    elif unit in {"giờ", "tiếng"}:
+        start = current - timedelta(hours=count)
+        label_unit = "giờ"
+    elif unit == "ngày":
         start = current - timedelta(days=count)
+        label_unit = "ngày"
     elif unit == "tuần":
         start = current - timedelta(weeks=count)
+        label_unit = "tuần"
     else:
         start = _shift_months(current, -count)
+        label_unit = "tháng"
     return TelemetryTimeRange(
         start=start.astimezone(UTC),
         end=current.astimezone(UTC),
-        label=f"{count} {unit} qua",
+        label=f"{count} {label_unit} qua",
     )
+
+
+def _parse_vietnamese_count(value: str) -> int:
+    if value.isdigit():
+        return int(value)
+    counts = {
+        "một": 1,
+        "hai": 2,
+        "ba": 3,
+        "bốn": 4,
+        "bon": 4,
+        "năm": 5,
+        "nam": 5,
+        "sáu": 6,
+        "sau": 6,
+        "bảy": 7,
+        "bay": 7,
+        "tám": 8,
+        "tam": 8,
+        "chín": 9,
+        "chin": 9,
+        "mười": 10,
+        "muoi": 10,
+    }
+    return counts.get(value, 0)
 
 
 def _parse_explicit_date_range(goal: str) -> TelemetryTimeRange | None:
@@ -544,6 +702,94 @@ def _parse_date_match(match: re.Match[str]) -> date | None:
         return date(int(year), int(month), int(day))
     except ValueError:
         return None
+
+
+def _resolve_point_lookup_time(
+    goal: str,
+    *,
+    now: datetime | None = None,
+) -> datetime | None:
+    match = _point_time_pattern().search(goal)
+    if match is None:
+        return None
+
+    current = _to_utc(now or get_utc_now()).astimezone(LOCAL_TIMEZONE)
+    hour = int(match.group("hour"))
+    minute = int(match.group("minute") or 0)
+    requested_date = _parse_point_date(goal, current.date())
+    if requested_date is None:
+        return None
+    local_requested = datetime.combine(
+        requested_date,
+        time(hour=hour, minute=minute),
+        tzinfo=LOCAL_TIMEZONE,
+    )
+    return local_requested.astimezone(UTC)
+
+
+def _point_time_pattern() -> re.Pattern[str]:
+    return re.compile(
+        r"\b(?P<hour>[01]?\d|2[0-3])\s*(?::|h|giờ)\s*(?P<minute>[0-5]\d)?\b",
+        re.IGNORECASE,
+    )
+
+
+def _parse_point_date(goal: str, current_date: date) -> date | None:
+    ymd_match = re.search(
+        r"\b(?P<year>\d{4})-(?P<month>\d{1,2})-(?P<day>\d{1,2})\b",
+        goal,
+    )
+    if ymd_match is not None:
+        return _safe_date(
+            int(ymd_match.group("year")),
+            int(ymd_match.group("month")),
+            int(ymd_match.group("day")),
+        )
+
+    dmy_match = re.search(
+        r"\b(?P<day>[1-9]|[12]\d|3[01])\s*(?:/|-|\.)\s*"
+        r"(?P<month>[1-9]|1[0-2])"
+        r"(?:\s*(?:/|-|\.)\s*(?P<year>\d{2,4}))?\b",
+        goal,
+    )
+    if dmy_match is not None:
+        return _safe_date(
+            _coerce_year(dmy_match.group("year"), current_date.year),
+            int(dmy_match.group("month")),
+            int(dmy_match.group("day")),
+        )
+
+    vn_match = re.search(
+        r"\bngày\s*(?P<day>[1-9]|[12]\d|3[01])"
+        r"(?:\s*tháng\s*(?P<month>[1-9]|1[0-2]))?"
+        r"(?:\s*năm\s*(?P<year>\d{2,4}))?\b",
+        goal,
+        re.IGNORECASE,
+    )
+    if vn_match is not None:
+        return _safe_date(
+            _coerce_year(vn_match.group("year"), current_date.year),
+            int(vn_match.group("month") or current_date.month),
+            int(vn_match.group("day")),
+        )
+
+    return current_date
+
+
+def _safe_date(year: int, month: int, day: int) -> date | None:
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+def _coerce_year(value: str | None, default: int) -> int:
+    if value is None:
+        return default
+    year = int(value)
+    if year < 100:
+        return 2000 + year
+    return year
 
 
 def _shift_months(value: datetime, months: int) -> datetime:
@@ -625,6 +871,58 @@ def _specific_query_summary(
     )
 
 
+def _point_query_summary(
+    query_kind: TelemetryQueryKind,
+    rows: list[Any],
+    point_time: datetime,
+) -> str:
+    label, unit, _ = _query_display(query_kind)
+    requested_text = _format_local_datetime(point_time)
+    if not rows:
+        return (
+            f"- Không có dữ liệu {label.casefold()} trong ±5 phút quanh "
+            f"{requested_text}."
+        )
+    telemetry, node, mission = rows[0]
+    value = (
+        telemetry.temperature_celsius
+        if query_kind.startswith("temperature")
+        else telemetry.humidity_percent
+    )
+    delta_seconds = abs((_to_utc(telemetry.timestamp) - point_time).total_seconds())
+    return (
+        f"- {label} gần {requested_text}: {float(value):.1f}{unit}; "
+        f"mẫu thực tế {_format_local_datetime(telemetry.timestamp)} "
+        f"(lệch {_format_duration(delta_seconds)}); "
+        f"thiết bị {node}; mission {mission}"
+    )
+
+
+def _missing_point_time_summary(query_kind: TelemetryQueryKind) -> str:
+    label, _, _ = _query_display(query_kind)
+    return f"- Cần thời điểm cụ thể để truy vấn {label.casefold()} tại thời điểm đó."
+
+
+def _is_point_query(query_kind: TelemetryQueryKind) -> bool:
+    return query_kind.endswith("_at")
+
+
+def _has_point_query(query_kinds: list[TelemetryQueryKind] | None) -> bool:
+    return query_kinds is not None and any(
+        _is_point_query(query_kind) for query_kind in query_kinds
+    )
+
+
+def _format_duration(seconds: float) -> str:
+    rounded = int(round(seconds))
+    minutes, remaining_seconds = divmod(rounded, 60)
+    if minutes == 0:
+        return f"{remaining_seconds} giây"
+    if remaining_seconds == 0:
+        return f"{minutes} phút"
+    return f"{minutes} phút {remaining_seconds} giây"
+
+
 def _query_display(query_kind: TelemetryQueryKind) -> tuple[str, str, str]:
     if query_kind == "temperature_max":
         return "Nhiệt độ", "°C", "cao nhất"
@@ -632,7 +930,11 @@ def _query_display(query_kind: TelemetryQueryKind) -> tuple[str, str, str]:
         return "Nhiệt độ", "°C", "thấp nhất"
     if query_kind == "humidity_max":
         return "Độ ẩm", "%", "cao nhất"
-    return "Độ ẩm", "%", "thấp nhất"
+    if query_kind == "humidity_min":
+        return "Độ ẩm", "%", "thấp nhất"
+    if query_kind == "temperature_at":
+        return "Nhiệt độ", "°C", "tại thời điểm"
+    return "Độ ẩm", "%", "tại thời điểm"
 
 
 def _query_range_text(time_range: TelemetryTimeRange | None) -> str:
@@ -645,6 +947,7 @@ def _query_range_text(time_range: TelemetryTimeRange | None) -> str:
 
 __all__ = [
     "TelemetryInput",
+    "TelemetryTemporalIntent",
     "TelemetryQueryKind",
     "TelemetryTimeRange",
     "TelemetryTool",
