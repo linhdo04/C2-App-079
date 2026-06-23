@@ -452,6 +452,7 @@ async def test_telemetry_tool_filters_and_summarizes_time_range(
     assert datetime(2026, 6, 1, tzinfo=UTC) in params.values()
     assert datetime(2026, 6, 8, tzinfo=UTC) in params.values()
     assert "Phân tích 2 mẫu telemetry trong" in result
+    assert "Thời điểm mẫu mới nhất: 15:00:00 ngày 07/06/2026 (giờ Việt Nam)" in result
     assert "trung bình 30.0°C" in result
     assert "thấp nhất 28.0°C; cao nhất 32.0°C" in result
     assert "trung bình 75.0%" in result
@@ -478,6 +479,146 @@ async def test_telemetry_tool_reports_empty_time_range(
 
     assert "trong 30 ngày qua" in result
     assert session.statements[0]._limit_clause is None
+
+
+@pytest.mark.asyncio
+async def test_telemetry_tool_queries_temperature_max_for_current_day_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent.react import ToolContext
+
+    row = (
+        TelemetryModel(
+            id=9,
+            iot_node_id=1,
+            timestamp=datetime(2026, 6, 23, 2, 0, tzinfo=UTC),
+            temperature_celsius=35.2,
+            humidity_percent=68,
+        ),
+        "Cảm biến 01",
+        "Ruộng lúa",
+    )
+    session = FakeTelemetrySession([[row]])
+
+    @asynccontextmanager
+    async def fake_db_session() -> Any:
+        yield session
+
+    monkeypatch.setattr("agent.tools.telemetry.db_session", fake_db_session)
+    monkeypatch.setattr(
+        "agent.tools.telemetry.get_utc_now",
+        lambda: datetime(2026, 6, 23, 3, 0, tzinfo=UTC),
+    )
+
+    result = await TelemetryTool().execute(
+        TelemetryInput(query_kinds=["temperature_max"]),
+        ToolContext(goal="nhiệt độ cao nhất là bao nhiêu?", user_id=7),
+    )
+
+    statement = session.statements[0]
+    statement_text = str(statement)
+    params = statement.compile().params
+    assert "telemetry.temperature_celsius IS NOT NULL" in statement_text
+    assert "telemetry.timestamp >= " in statement_text
+    assert "telemetry.timestamp < " in statement_text
+    assert "telemetry.temperature_celsius DESC" in statement_text
+    assert "telemetry.timestamp DESC" in statement_text
+    assert "telemetry.id DESC" in statement_text
+    assert datetime(2026, 6, 22, 17, 0, tzinfo=UTC) in params.values()
+    assert datetime(2026, 6, 23, 3, 0, tzinfo=UTC) in params.values()
+    assert "Truy vấn telemetry theo chỉ số trong hôm nay" in result
+    assert "Nhiệt độ cao nhất trong hôm nay: 35.2°C" in result
+    assert "thời điểm 09:00:00 ngày 23/06/2026 (giờ Việt Nam)" in result
+    assert "+00:00" not in result
+    assert "thiết bị Cảm biến 01; mission Ruộng lúa" in result
+    assert "trung bình" not in result
+    assert "Độ ẩm" not in result
+
+
+@pytest.mark.asyncio
+async def test_telemetry_tool_queries_humidity_min_for_explicit_range(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent.react import ToolContext
+
+    row = (
+        TelemetryModel(
+            id=10,
+            iot_node_id=1,
+            timestamp=datetime(2026, 6, 4, 8, 0, tzinfo=UTC),
+            temperature_celsius=30,
+            humidity_percent=55.4,
+        ),
+        "Cảm biến 02",
+        "Vườn tiêu",
+    )
+    session = FakeTelemetrySession([[row]])
+
+    @asynccontextmanager
+    async def fake_db_session() -> Any:
+        yield session
+
+    monkeypatch.setattr("agent.tools.telemetry.db_session", fake_db_session)
+
+    result = await TelemetryTool().execute(
+        TelemetryInput(
+            query_kinds=["humidity_min"],
+            start_time=datetime(2026, 6, 1, tzinfo=UTC),
+            end_time=datetime(2026, 6, 8, tzinfo=UTC),
+        ),
+        ToolContext(goal="độ ẩm thấp nhất từ 1/6 đến 7/6", user_id=7),
+    )
+
+    statement_text = str(session.statements[0])
+    assert "telemetry.humidity_percent IS NOT NULL" in statement_text
+    assert "telemetry.humidity_percent ASC" in statement_text
+    assert (
+        "Độ ẩm thấp nhất từ 07:00:00 ngày 01/06/2026 (giờ Việt Nam) "
+        "đến trước 07:00:00 ngày 08/06/2026 (giờ Việt Nam)"
+    ) in result
+    assert "55.4%" in result
+    assert "thiết bị Cảm biến 02; mission Vườn tiêu" in result
+
+
+@pytest.mark.asyncio
+async def test_telemetry_tool_handles_multiple_specific_queries_and_no_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent.react import ToolContext
+
+    humidity_row = (
+        TelemetryModel(
+            id=11,
+            iot_node_id=1,
+            timestamp=datetime(2026, 6, 23, 4, 0, tzinfo=UTC),
+            temperature_celsius=None,
+            humidity_percent=82.3,
+        ),
+        "Cảm biến 03",
+        "Nhà kính",
+    )
+    session = FakeTelemetrySession([[], [humidity_row]])
+
+    @asynccontextmanager
+    async def fake_db_session() -> Any:
+        yield session
+
+    monkeypatch.setattr("agent.tools.telemetry.db_session", fake_db_session)
+    monkeypatch.setattr(
+        "agent.tools.telemetry.get_utc_now",
+        lambda: datetime(2026, 6, 23, 5, 0, tzinfo=UTC),
+    )
+
+    result = await TelemetryTool().execute(
+        TelemetryInput(query_kinds=["temperature_min", "humidity_max"]),
+        ToolContext(goal="nhiệt độ thấp nhất và độ ẩm cao nhất hôm nay", user_id=7),
+    )
+
+    assert len(session.statements) == 2
+    assert "Không có dữ liệu nhiệt độ trong hôm nay" in result
+    assert "Độ ẩm cao nhất trong hôm nay: 82.3%" in result
+    assert "thời điểm 11:00:00 ngày 23/06/2026 (giờ Việt Nam)" in result
+    assert "trung bình" not in result
 
 
 @pytest.mark.asyncio
@@ -896,6 +1037,47 @@ async def test_semantic_tool_policy_accepts_telemetry_relative_range() -> None:
     assert decision == Action(
         tool="telemetry",
         input={"limit": 50, "relative_range": "last_7_days"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_semantic_tool_policy_accepts_telemetry_specific_query_kinds() -> None:
+    async def handler(tool_input: Any, context: Any) -> str:
+        return "unused"
+
+    telemetry_tool = CallableTool(
+        "telemetry",
+        "Read temperature and humidity owned by the user with time filters.",
+        handler,
+        input_model=TelemetryInput,
+    )
+    question = "Nhiệt độ cao nhất hôm nay là bao nhiêu?"
+    llm = FakePolicyLLM(
+        {
+            "actions": [
+                {
+                    "tool": "telemetry",
+                    "input": {
+                        "query_kinds": ["temperature_max"],
+                        "relative_range": "today",
+                    },
+                    "reason": "Needs the exact highest first-party temperature today.",
+                }
+            ],
+            "rationale": "Use telemetry for exact max value.",
+        }
+    )
+    policy = SemanticToolPolicy(llm, timeout_seconds=1)
+
+    decision = await policy.decide(question, InMemoryMemory(), (telemetry_tool,))
+
+    assert decision == Action(
+        tool="telemetry",
+        input={
+            "limit": 50,
+            "query_kinds": ["temperature_max"],
+            "relative_range": "today",
+        },
     )
 
 

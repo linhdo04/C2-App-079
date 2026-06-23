@@ -87,9 +87,14 @@ Source priority rules:
    such as "last_7_days", "last_30_days", "previous_week", "previous_month",
    "current_week", "current_month", "today", or "yesterday"; use
    start_time/end_time for explicit ranges or arbitrary N-day/week/month
-   periods. If no period is stated, use {"limit": 50}. Do not infer month/year
-   from ambiguous day-only phrases such as "ngày 18"; leave actions empty so
-   the assistant can ask the user to clarify the full date.
+   periods. When the user asks for exact highest/lowest values, use
+   query_kinds with "temperature_max", "temperature_min", "humidity_max", or
+   "humidity_min" and include only the requested kinds. If no period is stated
+   for a highest/lowest telemetry question, use query_kinds without an explicit
+   period so telemetry can default to today. For general telemetry summaries
+   without a period, use {"limit": 50}. Do not infer month/year from ambiguous
+   day-only phrases such as "ngày 18"; leave actions empty so the assistant can
+   ask the user to clarify the full date.
 2. Use search for external or time-sensitive context such as forecasts, current
    weather beyond field sensors, market/news/regulatory information, pest or
    disease advisories, or general up-to-date agronomic references.

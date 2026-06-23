@@ -7,7 +7,7 @@ validated model trong `execute()`.
 | --- | --- | --- |
 | `calculator` | `expression` | AST giới hạn độ dài, depth, operator và magnitude |
 | `search` | `query`, `max_results` | Tavily, trả nội dung kèm link nguồn khi có, idempotent và retryable |
-| `telemetry` | `limit`, `relative_range`, `start_time`, `end_time` | lọc theo authenticated user ownership; hỗ trợ “N ngày/tuần/tháng qua”, “tuần này”, “tháng này”, “tuần trước”, “tháng trước”, “hôm nay”, “hôm qua”, hoặc khoảng A-B |
+| `telemetry` | `limit`, `query_kinds`, `relative_range`, `start_time`, `end_time` | lọc theo authenticated user ownership; hỗ trợ summary theo thời gian và exact min/max nhiệt độ/độ ẩm |
 | `analysis` | crop, area, yield, season | tính sản lượng khi đủ dữ liệu |
 
 `Executor` không retry input validation, unknown tool hoặc permanent exception.
@@ -44,3 +44,9 @@ query riêng mẫu mới nhất để tránh load toàn bộ telemetry khi user 
 Nếu range không có dữ liệu, agent báo rõ thiếu telemetry và không dùng `search`
 để thay thế trừ khi user hỏi rõ nguồn ngoài/dự báo/web. Câu ngày mơ hồ như
 “ngày 18” phải được hỏi lại tháng/năm thay vì tự suy đoán.
+
+Khi user hỏi exact highest/lowest, tool dùng `query_kinds`:
+`temperature_max`, `temperature_min`, `humidity_max`, hoặc `humidity_min`. Nếu
+không nêu thời gian, exact min/max mặc định dùng “hôm nay” theo
+`Asia/Ho_Chi_Minh`. Các timestamp trong output đưa cho LLM/user được format theo
+giờ Việt Nam, ví dụ `12:09:33 ngày 23/06/2026 (giờ Việt Nam)`.

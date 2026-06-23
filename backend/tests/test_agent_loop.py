@@ -47,6 +47,22 @@ class SequenceReasoner:
         return "safe finalization"
 
 
+class SequenceToolPolicy:
+    def __init__(self, actions: list[Action | None]) -> None:
+        self.actions = actions
+        self.calls = 0
+
+    async def decide(
+        self,
+        goal: str,
+        memory: Memory,
+        tools: Sequence[Tool],
+    ) -> Action | None:
+        action = self.actions[min(self.calls, len(self.actions) - 1)]
+        self.calls += 1
+        return action
+
+
 def create_loop(
     reasoner: Any,
     tools: list[Tool] | None = None,
@@ -147,6 +163,105 @@ async def test_tool_policy_runs_before_reasoner_decision() -> None:
 
 
 @pytest.mark.asyncio
+async def test_exact_telemetry_skips_second_tool_policy_call() -> None:
+    telemetry_calls = 0
+
+    async def telemetry(tool_input: BaseModel, context: ToolContext) -> str:
+        nonlocal telemetry_calls
+        telemetry_calls += 1
+        return (
+            "Truy vấn telemetry theo chỉ số trong hôm nay:\n"
+            "- Nhiệt độ cao nhất trong hôm nay: 35.0°C; "
+            "thời điểm 12:09:33 ngày 23/06/2026 (giờ Việt Nam); "
+            "thiết bị Cảm biến 01; mission Ruộng lúa\n"
+            "- Đây là số đo lịch sử, không phải dự báo thời tiết."
+        )
+
+    telemetry_tool = CallableTool(
+        "telemetry",
+        "Read temperature and humidity owned by the user.",
+        telemetry,
+        input_model=TelemetryInput,
+    )
+    reasoner = SequenceReasoner(
+        [
+            ReasoningDecision(
+                thought="Complete.",
+                is_done=True,
+                final_answer="Nhiệt độ cao nhất hôm nay là 35.0°C.",
+            )
+        ]
+    )
+    policy = SequenceToolPolicy(
+        [Action(tool="telemetry", input={"query_kinds": ["temperature_max"]})]
+    )
+
+    result = await create_loop(
+        reasoner,
+        [telemetry_tool],
+        tool_policy=policy,
+    ).run("Nhiệt độ cao nhất hôm nay là bao nhiêu?")
+
+    assert telemetry_calls == 1
+    assert policy.calls == 1
+    assert reasoner.calls == 1
+    assert result.final_response == "Nhiệt độ cao nhất hôm nay là 35.0°C."
+
+
+@pytest.mark.asyncio
+async def test_exact_telemetry_keeps_second_policy_call_for_external_intent() -> None:
+    search_calls = 0
+
+    async def telemetry(tool_input: BaseModel, context: ToolContext) -> str:
+        return "Nhiệt độ cao nhất trong hôm nay: 35.0°C."
+
+    async def search(tool_input: BaseModel, context: ToolContext) -> str:
+        nonlocal search_calls
+        search_calls += 1
+        return "Dự báo thời tiết hôm nay có mưa."
+
+    telemetry_tool = CallableTool(
+        "telemetry",
+        "Read temperature and humidity owned by the user.",
+        telemetry,
+        input_model=TelemetryInput,
+    )
+    search_tool = CallableTool(
+        "search",
+        "Search web",
+        search,
+        input_model=SearchInput,
+    )
+    reasoner = SequenceReasoner(
+        [
+            ReasoningDecision(
+                thought="Complete.",
+                is_done=True,
+                final_answer="Nhiệt độ cao nhất là 35.0°C và có mưa.",
+            )
+        ]
+    )
+    policy = SequenceToolPolicy(
+        [
+            Action(tool="telemetry", input={"query_kinds": ["temperature_max"]}),
+            Action(tool="search", input={"query": "dự báo thời tiết hôm nay"}),
+            None,
+        ]
+    )
+
+    result = await create_loop(
+        reasoner,
+        [telemetry_tool, search_tool],
+        tool_policy=policy,
+    ).run("Nhiệt độ cao nhất hôm nay và dự báo thời tiết hôm nay thế nào?")
+
+    assert policy.calls == 3
+    assert search_calls == 1
+    assert reasoner.calls == 1
+    assert result.final_response == "Nhiệt độ cao nhất là 35.0°C và có mưa."
+
+
+@pytest.mark.asyncio
 async def test_reasoner_error_propagates_to_api_layer() -> None:
     class FailingReasoner:
         async def decide(
@@ -227,6 +342,61 @@ async def test_empty_telemetry_blocks_implicit_search() -> None:
 
 
 @pytest.mark.asyncio
+async def test_empty_specific_telemetry_blocks_implicit_search() -> None:
+    search_calls = 0
+
+    async def telemetry(tool_input: BaseModel, context: ToolContext) -> str:
+        return "Không có dữ liệu nhiệt độ trong hôm nay."
+
+    async def search(tool_input: BaseModel, context: ToolContext) -> str:
+        nonlocal search_calls
+        search_calls += 1
+        return "web result"
+
+    reasoner = SequenceReasoner(
+        [
+            ReasoningDecision(
+                thought="Use telemetry.",
+                action=Action(
+                    tool="telemetry",
+                    input={"query_kinds": ["temperature_max"]},
+                ),
+            ),
+            ReasoningDecision(
+                thought="Try web search.",
+                action=Action(
+                    tool="search",
+                    input={"query": "nhiệt độ cao nhất hôm nay"},
+                ),
+            ),
+        ]
+    )
+
+    result = await create_loop(
+        reasoner,
+        [
+            CallableTool(
+                "telemetry",
+                "Read temperature and humidity owned by the user.",
+                telemetry,
+                input_model=TelemetryInput,
+            ),
+            CallableTool(
+                "search",
+                "Search web",
+                search,
+                input_model=SearchInput,
+            ),
+        ],
+    ).run("nhiệt độ cao nhất hôm nay là bao nhiêu?")
+
+    assert search_calls == 0
+    assert result.done is True
+    assert "Không có dữ liệu nhiệt độ hoặc độ ẩm" in result.final_response
+    assert "không dùng kết quả tìm kiếm web" in result.final_response
+
+
+@pytest.mark.asyncio
 async def test_empty_telemetry_allows_search_when_external_intent_is_explicit() -> None:
     search_calls = 0
 
@@ -300,6 +470,47 @@ async def test_ambiguous_day_only_telemetry_date_asks_for_clarification() -> Non
                         "start_time": "2024-05-18T00:00:00Z",
                         "end_time": "2024-05-18T23:59:59Z",
                     },
+                ),
+            )
+        ]
+    )
+
+    result = await create_loop(
+        reasoner,
+        [
+            CallableTool(
+                "telemetry",
+                "Read temperature and humidity owned by the user.",
+                telemetry,
+                input_model=TelemetryInput,
+            )
+        ],
+    ).run("nhiệt độ thấp nhất trong ngày 18 là bao nhiêu?")
+
+    assert telemetry_calls == 0
+    assert result.done is True
+    assert "ngày, tháng và năm" in result.final_response
+    assert "không tự suy đoán tháng/năm" in result.final_response
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_day_only_specific_telemetry_query_asks_for_clarification() -> (
+    None
+):
+    telemetry_calls = 0
+
+    async def telemetry(tool_input: BaseModel, context: ToolContext) -> str:
+        nonlocal telemetry_calls
+        telemetry_calls += 1
+        return "should not execute"
+
+    reasoner = SequenceReasoner(
+        [
+            ReasoningDecision(
+                thought="Use telemetry.",
+                action=Action(
+                    tool="telemetry",
+                    input={"query_kinds": ["temperature_min"]},
                 ),
             )
         ]
