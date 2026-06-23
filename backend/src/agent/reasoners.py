@@ -2,7 +2,9 @@
 
 import asyncio
 import json
+import re
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from typing import Any, Literal, cast
 from urllib.parse import urlparse
 
@@ -11,7 +13,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from .prompts import REACT_PROMPT, SYSTEM_PROMPT
-from .react import Action, Memory, Reasoner, ReasoningDecision, Tool
+from .react import Action, Memory, Reasoner, ReasoningDecision, Tool, _was_action_called
 from .tracing import agent_span, langchain_config, update_observation
 
 logger = structlog.get_logger(__name__)
@@ -23,6 +25,30 @@ LLM_RETRYABLE_CODE_NAMES = {
     "DEADLINE_EXCEEDED",
     "INTERNAL",
 }
+
+# Gemini embeds the suggested retry delay in two places inside the 429 body:
+#   "Please retry in 28.823862733s"       (human-readable message, float seconds)
+#   'retryDelay': '28s'  or  "retryDelay": "28s"  (structured RetryInfo detail)
+_RETRY_DELAY_PATTERNS = (
+    re.compile(r"retry in (\d+(?:\.\d+)?)s", re.IGNORECASE),
+    re.compile(r"""['"]retryDelay['"]\s*:\s*['"](\d+(?:\.\d+)?)s['"]"""),
+)
+_MAX_SERVER_RETRY_DELAY_SECONDS = 120.0
+
+
+"""Return the server-suggested retry delay (seconds) embedded in a 429 body, or None."""
+
+
+def _extract_server_retry_delay(exc: Exception) -> float | None:
+    text = str(exc)
+    for pattern in _RETRY_DELAY_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            try:
+                return float(match.group(1))
+            except ValueError:
+                continue
+    return None
 
 
 class FallbackRouteDecision(BaseModel):
@@ -48,18 +74,26 @@ async def _ainvoke_llm_with_retry(
         except Exception as exc:
             retryable = _is_retryable_llm_error(exc)
             should_retry = retryable and attempt < allowed_attempts
+            server_delay = _extract_server_retry_delay(exc)
+            if should_retry:
+                if server_delay is not None:
+                    sleep_seconds: float = min(
+                        server_delay, _MAX_SERVER_RETRY_DELAY_SECONDS
+                    )
+                else:
+                    sleep_seconds = backoff_seconds * (2 ** (attempt - 1))
             logger.warning(
                 "agent_llm_call_failed",
                 operation=operation,
                 attempt=attempt,
                 will_retry=should_retry,
+                sleep_seconds=sleep_seconds if should_retry else None,
                 error_type=type(exc).__name__,
-                **_llm_error_metadata(exc),
+                **_llm_error_metadata(exc, server_delay=server_delay),
             )
             if not should_retry:
                 raise
-            await asyncio.sleep(backoff_seconds * (2 ** (attempt - 1)))
-    raise RuntimeError("LLM retry loop exited unexpectedly")
+            await asyncio.sleep(sleep_seconds)
 
 
 def _is_retryable_llm_error(exc: Exception) -> bool:
@@ -72,20 +106,14 @@ def _is_retryable_llm_error(exc: Exception) -> bool:
     if code is not None and code in LLM_RETRYABLE_CODE_NAMES:
         return True
     message = str(exc).casefold()
-    return any(
-        marker in message
-        for marker in (
-            "429",
-            "rate limit",
-            "resource exhausted",
-            "quota",
-            "temporarily unavailable",
-            "service unavailable",
-        )
-    )
+    return any(marker in message for marker in _LLM_RETRYABLE_MESSAGE_MARKERS)
 
 
-def _llm_error_metadata(exc: Exception) -> dict[str, Any]:
+def _llm_error_metadata(
+    exc: Exception,
+    *,
+    server_delay: float | None = None,
+) -> dict[str, Any]:
     metadata: dict[str, Any] = {"retryable": _is_retryable_llm_error(exc)}
     status_code = _llm_status_code(exc)
     if status_code is not None:
@@ -93,6 +121,12 @@ def _llm_error_metadata(exc: Exception) -> dict[str, Any]:
     code = _llm_error_code(exc)
     if code is not None:
         metadata["provider_code"] = code
+    # Use pre-computed value when available to avoid running the regex twice.
+    delay = (
+        server_delay if server_delay is not None else _extract_server_retry_delay(exc)
+    )
+    if delay is not None:
+        metadata["server_retry_delay"] = delay
     return metadata
 
 
@@ -130,6 +164,76 @@ def _llm_error_code(exc: Exception) -> str | None:
     if isinstance(name, str):
         return name
     return str(code).rsplit(".", maxsplit=1)[-1]
+
+
+@dataclass(frozen=True)
+class LLMErrorClassification:
+    http_status: int
+    error_code: str
+    message: str
+
+
+_RATE_LIMIT_MARKERS = ("429", "rate limit", "resource exhausted", "quota")
+_UNAVAILABLE_MARKERS = ("temporarily unavailable", "service unavailable")
+_LLM_RETRYABLE_MESSAGE_MARKERS = _RATE_LIMIT_MARKERS + _UNAVAILABLE_MARKERS
+
+
+def classify_llm_error(exc: Exception) -> LLMErrorClassification:
+    """Map a post-retry LLM exception to a user-facing classification."""
+    if isinstance(exc, TimeoutError):
+        return LLMErrorClassification(
+            504,
+            "timeout",
+            "Yêu cầu mất quá nhiều thời gian, vui lòng thử lại.",
+        )
+
+    status_code = _llm_status_code(exc)
+    code = _llm_error_code(exc)
+    message_lower = str(exc).casefold()
+
+    if code == "DEADLINE_EXCEEDED":
+        return LLMErrorClassification(
+            504,
+            "timeout",
+            "Yêu cầu mất quá nhiều thời gian, vui lòng thử lại.",
+        )
+
+    is_rate_limit = (
+        status_code == 429
+        or code in {"RESOURCE_EXHAUSTED"}
+        or any(m in message_lower for m in _RATE_LIMIT_MARKERS)
+    )
+    if is_rate_limit:
+        return LLMErrorClassification(
+            503,
+            "rate_limit",
+            "Hệ thống đang quá tải, vui lòng thử lại sau ít phút.",
+        )
+
+    is_provider_down = (
+        status_code in {500, 502, 503, 504}
+        or code in {"UNAVAILABLE", "INTERNAL"}
+        or any(m in message_lower for m in _UNAVAILABLE_MARKERS)
+    )
+    if is_provider_down:
+        return LLMErrorClassification(
+            503,
+            "provider_unavailable",
+            "Dịch vụ AI tạm thời gián đoạn, vui lòng thử lại.",
+        )
+
+    if isinstance(exc, (ConnectionError, OSError)):
+        return LLMErrorClassification(
+            503,
+            "service_unavailable",
+            "Không thể kết nối đến dịch vụ AI, vui lòng thử lại.",
+        )
+
+    return LLMErrorClassification(
+        500,
+        "internal_error",
+        "Đã xảy ra lỗi không mong đợi, vui lòng thử lại.",
+    )
 
 
 class GeminiReasoner:
@@ -348,7 +452,7 @@ class LLMToolRouter:
 
 
 class LLMRoutedFallbackReasoner:
-    """Fallback reasoner that asks an LLM router before using generic search."""
+    """Fallback reasoner that asks an LLM router for a safe tool choice."""
 
     def __init__(self, router: LLMToolRouter | None) -> None:
         self._router = router
@@ -381,13 +485,7 @@ class LLMRoutedFallbackReasoner:
                     error_type=type(exc).__name__,
                     **_llm_error_metadata(exc),
                 )
-
-        action = _default_search_action(goal, tools, memory)
-        if action is not None:
-            return ReasoningDecision(
-                thought="Use search as the generic fallback evidence source.",
-                action=action,
-            )
+                raise
 
         return ReasoningDecision(
             thought="No fallback tool is available.",
@@ -443,40 +541,9 @@ def _action_from_route(
         return None
     action = Action(
         tool=tool.name,
-        input=validated_input.model_dump(mode="json"),
+        input=validated_input.model_dump(mode="json", exclude_none=True),
     )
     return None if _was_action_called(action, memory) else action
-
-
-def _default_search_action(
-    goal: str,
-    tools: Sequence[Tool],
-    memory: Memory,
-) -> Action | None:
-    search = next((tool for tool in tools if tool.name == "search"), None)
-    if search is None:
-        return None
-    try:
-        validated_input = search.input_model.model_validate(
-            {"query": goal, "max_results": 5}
-        )
-    except Exception:
-        return None
-    action = Action(
-        tool="search",
-        input=validated_input.model_dump(mode="json"),
-    )
-    return None if _was_action_called(action, memory) else action
-
-
-def _was_action_called(action: Action, memory: Memory) -> bool:
-    call_key = f"{action.tool}:{json.dumps(action.input, sort_keys=True)}"
-    return any(
-        step.action is not None
-        and f"{step.action.tool}:{json.dumps(step.action.input, sort_keys=True)}"
-        == call_key
-        for step in memory.steps()
-    )
 
 
 def _parse_fallback_route_decision(response: Any) -> FallbackRouteDecision:
@@ -620,22 +687,19 @@ def _format_search_fallback_answer(
             break
 
     bullets = []
-    sources = []
     for index, result in enumerate(unique_results, start=1):
         snippet = _shorten(result.get("snippet", "").strip(), 260)
         title = result.get("title") or _source_label(result["url"])
         if snippet:
-            bullets.append(f"- {snippet} [{index}]")
+            bullets.append(f"- {snippet} [{index}]({result['url']})")
         else:
-            bullets.append(f"- Có nguồn liên quan: {title} [{index}]")
-        sources.append(f"{index}. [{title}]({result['url']})")
+            bullets.append(f"- Có nguồn liên quan: {title} [{index}]({result['url']})")
 
     return "\n\n".join(
         [
-            "Tôi tìm thấy một số nguồn web liên quan. Bạn nên dùng các nguồn "
-            "dưới đây để kiểm chứng trước khi áp dụng.",
+            "Tôi tìm thấy một số nguồn web liên quan. Các số trích dẫn trong "
+            "nội dung là đường dẫn nguồn để kiểm chứng.",
             "Thông tin nổi bật:\n" + "\n".join(bullets),
-            "Nguồn tham khảo:\n" + "\n".join(sources),
         ]
     )
 

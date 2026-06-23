@@ -3,14 +3,16 @@
 `react.py` chứa core không phụ thuộc Gemini, database hay Tavily:
 
 - `AgentLoop`: iteration, chống lặp, termination và run summary.
+- `ToolPolicy`: source-priority classifier chạy trước reasoner mỗi iteration; trả `Action | None`.
 - `Reasoner`: provider-neutral planning/finalization.
 - `Tool`/`ToolRegistry`: capability và input schema.
 - `Executor`: validation, timeout, retry/backoff và safe observation.
 - `InMemoryMemory`: recent conversation và request-local ReAct steps.
 
 `factory.py` là composition root production. Gemini là primary reasoner;
-heuristic reasoner là fallback. Registry production có `calculator`, `search`,
-`telemetry`, `analysis`.
+fallback reasoner dùng Gemini router schema nhỏ để chọn tool khi primary lỗi.
+Nếu router fallback cũng lỗi, lỗi được trả về API thay vì tự chạy `search`.
+Registry production có `calculator`, `search`, `telemetry`, `analysis`.
 
 Mỗi run có `run_id`. Structured logs ghi iteration/tool attempt/duration,
 provider fallback, termination reason và final `agent_run_summary`.

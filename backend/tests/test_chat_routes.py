@@ -499,11 +499,52 @@ async def test_stream_chat_message_rolls_back_and_emits_error(
     body = "".join(chunks)
 
     assert "event: error" in body
-    assert '"error": "stream_error"' in body
-    assert '"message": "Không thể hoàn tất phản hồi lúc này."' in body
+    assert '"error": "internal_error"' in body
+    assert '"message": "Đã xảy ra lỗi không mong đợi, vui lòng thử lại."' in body
     assert "stream unavailable" not in body
     assert session.rollback_count == 2
     assert session.added == []
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_message_emits_rate_limit_error_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RateLimitError(Exception):
+        status_code = 429
+
+    chat = ChatSessionModel(id=10, user_id=7, title="Cuộc trò chuyện mới")
+    session = FakeSession([chat])
+
+    async def rate_limited_stream(
+        question: str,
+        user_id: int,
+        *,
+        session_id: str | None = None,
+        history: list[Any],
+    ) -> Any:
+        if False:
+            yield ""
+        raise RateLimitError("rate limit exceeded")
+
+    monkeypatch.setattr(
+        "api.routes.agent_routes.stream_agent",
+        rate_limited_stream,
+    )
+
+    response = await stream_chat_message(
+        10,
+        AskRequest(question="Tư vấn lúa"),
+        user_factory(),
+        session,  # type: ignore[arg-type]
+    )
+    chunks = [response_chunk_text(chunk) async for chunk in response.body_iterator]
+    body = "".join(chunks)
+
+    assert "event: error" in body
+    assert '"error": "rate_limit"' in body
+    assert '"message": "Hệ thống đang quá tải, vui lòng thử lại sau ít phút."' in body
+    assert session.rollback_count == 2
 
 
 @pytest.mark.asyncio

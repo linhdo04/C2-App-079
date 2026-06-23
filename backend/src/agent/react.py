@@ -3,6 +3,7 @@
 import asyncio
 import inspect
 import json
+import re
 import time
 import uuid
 from abc import ABC, abstractmethod
@@ -176,6 +177,98 @@ class Reasoner(Protocol):
     ) -> ReasoningDecision: ...
 
     async def finalize(self, goal: str, memory: Memory) -> str: ...
+
+
+class ToolPolicy(Protocol):
+    async def decide(
+        self,
+        goal: str,
+        memory: Memory,
+        tools: Sequence[Tool],
+    ) -> Action | None: ...
+
+
+def _was_action_called(action: Action, memory: Memory) -> bool:
+    call_key = f"{action.tool}:{json.dumps(action.input, sort_keys=True)}"
+    return any(
+        step.action is not None
+        and f"{step.action.tool}:{json.dumps(step.action.input, sort_keys=True)}"
+        == call_key
+        for step in memory.steps()
+    )
+
+
+_EXTERNAL_SEARCH_INTENT_PATTERN = re.compile(
+    r"\b("
+    r"search|web|internet|google|forecast|news|market|regulation|"
+    r"tìm\s*kiếm|tra\s*cứu|trên\s*mạng|trên\s*web|internet|google|"
+    r"dự\s*báo|thời\s*tiết|hiện\s*tại|tin\s*tức|thị\s*trường|"
+    r"giá\s*(?:cả|thị\s*trường)?|quy\s*định|khuyến\s*cáo|cảnh\s*báo|"
+    r"sâu\s*bệnh"
+    r")\b",
+    re.IGNORECASE,
+)
+_AMBIGUOUS_DAY_ONLY_PATTERN = re.compile(
+    r"\bngày\s+(?:[1-9]|[12]\d|3[01])\b",
+    re.IGNORECASE,
+)
+_COMPLETE_DATE_PATTERN = re.compile(
+    r"("
+    r"\bngày\s+(?:[1-9]|[12]\d|3[01])\s*(?:/|-|\.|tháng)\b|"
+    r"\b(?:[1-9]|[12]\d|3[01])\s*(?:/|-|\.)\s*(?:[1-9]|1[0-2])\b"
+    r")",
+    re.IGNORECASE,
+)
+_TELEMETRY_NO_DATA_MARKER = "Không có dữ liệu nhiệt độ hoặc độ ẩm"
+
+
+def _has_explicit_external_search_intent(goal: str) -> bool:
+    return _EXTERNAL_SEARCH_INTENT_PATTERN.search(goal) is not None
+
+
+def _has_empty_telemetry_observation(memory: Memory) -> bool:
+    return any(
+        step.action is not None
+        and step.action.tool == "telemetry"
+        and _TELEMETRY_NO_DATA_MARKER in step.observation
+        for step in memory.steps()
+    )
+
+
+def _has_ambiguous_day_only_date(goal: str) -> bool:
+    return (
+        _AMBIGUOUS_DAY_ONLY_PATTERN.search(goal) is not None
+        and _COMPLETE_DATE_PATTERN.search(goal) is None
+    )
+
+
+def _decision_guard_response(
+    goal: str,
+    action: Action,
+    memory: Memory,
+) -> str | None:
+    if (
+        action.tool == "search"
+        and _has_empty_telemetry_observation(memory)
+        and not _has_explicit_external_search_intent(goal)
+    ):
+        return (
+            "Không có dữ liệu nhiệt độ hoặc độ ẩm của bạn cho khoảng thời gian "
+            "đã hỏi. Tôi sẽ không dùng kết quả tìm kiếm web để thay thế dữ liệu "
+            "telemetry nội bộ khi bạn chưa yêu cầu nguồn bên ngoài. Bạn có thể "
+            "chọn khoảng thời gian khác hoặc kiểm tra thiết bị đã gửi dữ liệu chưa."
+        )
+    if (
+        action.tool == "telemetry"
+        and ("start_time" in action.input or "end_time" in action.input)
+        and _has_ambiguous_day_only_date(goal)
+    ):
+        return (
+            "Bạn vui lòng cung cấp đầy đủ ngày, tháng và năm cho khoảng thời gian "
+            "cần xem telemetry, ví dụ: 18/06/2026. Câu hỏi hiện chỉ nêu “ngày 18” "
+            "nên tôi không tự suy đoán tháng/năm để tránh lấy sai dữ liệu."
+        )
+    return None
 
 
 @dataclass(frozen=True)
@@ -427,6 +520,7 @@ class AgentLoop:
         termination_condition: TerminationCondition,
         max_iterations: int = 6,
         guardrails: GuardrailPipeline | None = None,
+        tool_policy: ToolPolicy | None = None,
     ) -> None:
         if max_iterations <= 0:
             raise ValueError("max_iterations must be positive")
@@ -435,6 +529,7 @@ class AgentLoop:
         self.termination_condition = termination_condition
         self.max_iterations = max_iterations
         self.guardrails = guardrails
+        self.tool_policy = tool_policy
 
     async def run(
         self,
@@ -503,9 +598,26 @@ class AgentLoop:
                 for iteration in range(1, self.max_iterations + 1):
                     last_iteration = iteration
                     try:
-                        decision = await self.reasoner.decide(
-                            safe_goal, active_memory, self.executor.registry.list()
+                        tools = self.executor.registry.list()
+                        policy_action = (
+                            await self.tool_policy.decide(
+                                safe_goal, active_memory, tools
+                            )
+                            if self.tool_policy is not None
+                            else None
                         )
+                        if policy_action is not None:
+                            decision = ReasoningDecision(
+                                thought=(
+                                    f"Policy selected {policy_action.tool}"
+                                    " for required evidence."
+                                ),
+                                action=policy_action,
+                            )
+                        else:
+                            decision = await self.reasoner.decide(
+                                safe_goal, active_memory, tools
+                            )
                     except Exception as exc:
                         logger.error(
                             "agent_reasoner_failed",
@@ -513,8 +625,7 @@ class AgentLoop:
                             iteration=iteration,
                             error_type=type(exc).__name__,
                         )
-                        reason = "reasoner_error"
-                        break
+                        raise
 
                     if decision.is_done:
                         final_response = decision.final_answer or ""
@@ -530,6 +641,31 @@ class AgentLoop:
                         action = decision.action
                         if action is None:
                             reason = "reasoner_error"
+                            break
+                        guarded_response = _decision_guard_response(
+                            safe_goal, action, active_memory
+                        )
+                        if guarded_response is not None:
+                            final_response = guarded_response
+                            step = ReActStep(
+                                thought=decision.thought,
+                                action=None,
+                                observation=final_response,
+                                is_done=True,
+                            )
+                            done = True
+                            reason = "done"
+                            logger.info(
+                                "agent_decision_guarded",
+                                run_id=run_id,
+                                iteration=iteration,
+                                tool=action.tool,
+                            )
+                            active_memory.add(step)
+                            if on_step is not None:
+                                callback_result = on_step(iteration, step)
+                                if inspect.isawaitable(callback_result):
+                                    await callback_result
                             break
                         call_key = (
                             f"{action.tool}:{json.dumps(action.input, sort_keys=True)}"
@@ -665,5 +801,7 @@ __all__ = [
     "TerminationReason",
     "Tool",
     "ToolContext",
+    "ToolPolicy",
     "ToolRegistry",
+    "_was_action_called",
 ]

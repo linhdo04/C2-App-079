@@ -1,3 +1,4 @@
+import hashlib
 import math
 import time
 import uuid
@@ -56,6 +57,10 @@ end
 """
 
 _logger_rl = structlog.get_logger("rate_limit")
+
+
+def _hash_rate_limit_identifier(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -155,7 +160,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         key_remaining: int | None = None
         if api_key:
             key_allowed, key_remaining, key_retry_ms = await self._check(
-                key=f"rl:apikey:{api_key}",
+                key=f"rl:apikey:{_hash_rate_limit_identifier(api_key)}",
                 now_ms=now_ms,
                 window_ms=self._key_window_ms,
                 limit=self._key_limit,

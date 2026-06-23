@@ -78,6 +78,7 @@ class Settings(BaseSettings):
     api_host: str = Field(alias="API_HOST", default="0.0.0.0")
     api_port: int = Field(alias="API_PORT", default=8000)
     api_prefix: str = Field(alias="API_PREFIX", default="/api")
+    drone_api_key: str | None = Field(alias="DRONE_API_KEY", default=None)
 
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
         alias="LOG_LEVEL", default="INFO"

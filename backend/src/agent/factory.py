@@ -11,6 +11,7 @@ from .reasoners import (
     LLMRoutedFallbackReasoner,
     LLMToolRouter,
 )
+from .tool_policy import SemanticToolPolicy
 from .tools import (
     AnalysisTool,
     CalculatorTool,
@@ -58,6 +59,12 @@ def create_default_agent() -> Agent:
             termination_condition=DoneOrMaxIterations(),
             max_iterations=settings.agent_max_iterations,
             guardrails=guardrails,
+            tool_policy=SemanticToolPolicy(
+                llm,
+                timeout_seconds=settings.agent_fallback_router_timeout_seconds,
+                max_retries=settings.agent_llm_max_retries,
+                backoff_seconds=settings.agent_llm_retry_backoff_seconds,
+            ),
         )
     )
 

@@ -28,6 +28,7 @@ class IoTNodeModel(BaseModel, table=True):
     name: str = Field(nullable=False)
     node_type: str | None = Field(default=None)
     serial_number: str | None = Field(default=None, unique=True)
+    api_key_hash: str | None = Field(default=None)
     mission_id: int | None = Field(
         default=None,
         foreign_key="missions.id",

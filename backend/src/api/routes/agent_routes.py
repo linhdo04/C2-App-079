@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Annotated, Any, cast
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import ColumnElement, and_, exists, or_, select
@@ -15,6 +16,7 @@ from starlette.responses import StreamingResponse
 
 from agent.agent import run_agent, stream_agent
 from agent.react import ConversationMessage
+from agent.reasoners import classify_llm_error
 from api.dependencies import get_current_user
 from api.responses import CollectionMeta, CollectionResponse, DataResponse
 from core import settings
@@ -25,6 +27,7 @@ from models.chat_session import ChatSessionModel
 from models.user import UserModel
 
 router = APIRouter()
+logger = structlog.get_logger(__name__)
 
 
 class AskRequest(BaseModel):
@@ -288,14 +291,23 @@ async def ask(
     req: AskRequest,
     current_user: Annotated[UserModel, Depends(get_current_user)],
 ) -> DataResponse[AgentAnswerPublic]:
+    if current_user.id is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
     try:
-        # Prefer the async helper which normalizes sync/async implementations
-        if current_user.id is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
         result = await run_agent(req.question, current_user.id)
         return DataResponse(data=AgentAnswerPublic(answer=result))
     except Exception as exc:  # pragma: no cover - bubble up runtime errors
-        raise HTTPException(status_code=500, detail=str(exc))
+        classification = classify_llm_error(exc)
+        logger.warning(
+            "agent_ask_error",
+            error_code=classification.error_code,
+            http_status=classification.http_status,
+            exc_type=type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=classification.http_status,
+            detail=classification.message,
+        ) from exc
 
 
 @router.post(
@@ -494,7 +506,18 @@ async def create_chat_message(
             history=history,
         )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        classification = classify_llm_error(exc)
+        logger.warning(
+            "agent_error_after_retries",
+            chat_id=chat_id,
+            error_code=classification.error_code,
+            http_status=classification.http_status,
+            exc_type=type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=classification.http_status,
+            detail=classification.message,
+        ) from exc
 
     return DataResponse(
         data=await _persist_chat_exchange(
@@ -567,13 +590,21 @@ async def stream_chat_message(
                 "done",
                 {"data": result.model_dump(mode="json")},
             )
-        except Exception:
+        except Exception as exc:
             await session.rollback()
+            classification = classify_llm_error(exc)
+            logger.warning(
+                "agent_stream_error_after_retries",
+                chat_id=chat_id,
+                error_code=classification.error_code,
+                http_status=classification.http_status,
+                exc_type=type(exc).__name__,
+            )
             yield _sse_event(
                 "error",
                 {
-                    "error": "stream_error",
-                    "message": "Không thể hoàn tất phản hồi lúc này.",
+                    "error": classification.error_code,
+                    "message": classification.message,
                 },
             )
 
