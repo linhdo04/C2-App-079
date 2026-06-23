@@ -7,12 +7,11 @@ import { formatMetric, metricChange, metricPoints } from "./dashboard-utils";
 
 type DashboardContentProps = {
   readings: TelemetryReading[];
-  sampleLimit: number;
   isRefreshing: boolean;
   onRefresh: () => void;
 };
 
-export function DashboardContent({ readings, sampleLimit, isRefreshing, onRefresh }: DashboardContentProps) {
+export function DashboardContent({ readings, isRefreshing, onRefresh }: DashboardContentProps) {
   const latest = readings.at(-1)!;
   const temperatures = metricPoints(readings, "temperature_celsius");
   const humidities = metricPoints(readings, "humidity_percent");
@@ -28,7 +27,6 @@ export function DashboardContent({ readings, sampleLimit, isRefreshing, onRefres
         <DashboardHeader />
         <DashboardOverview
           readings={readings}
-          sampleLimit={sampleLimit}
           latest={latest}
           temperatures={temperatures}
           humidities={humidities}

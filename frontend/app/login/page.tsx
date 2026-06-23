@@ -7,5 +7,5 @@ export const metadata: Metadata = {
 };
 
 export default function LoginPage() {
-  return <AuthRoute mode="login" />;
+  return <AuthRoute />;
 }

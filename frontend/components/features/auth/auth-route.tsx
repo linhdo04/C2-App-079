@@ -8,38 +8,23 @@ import { AuthPanel } from "@/components/features/auth/auth-panel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
-import { useLoginMutation, useRegisterMutation } from "@/lib/api-hooks";
+import { useLoginMutation } from "@/lib/api-hooks";
 import { saveSession } from "@/lib/auth-client";
 import { useAuthStore } from "@/lib/auth-store";
 import type { AuthFormValues } from "@/lib/validation";
-import type { AuthMode } from "@/types/auth";
 import { toast } from "sonner";
 
-type AuthRouteProps = {
-  mode: AuthMode;
-};
-
-export function AuthRoute({ mode }: AuthRouteProps) {
+export function AuthRoute() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const authStatus = useAuthStore((state) => state.authStatus);
   const setAuthenticated = useAuthStore((state) => state.setAuthenticated);
   const isAuthenticated = authStatus === "authenticated";
-  const registerMutation = useRegisterMutation();
   const loginMutation = useLoginMutation();
-  const isLoading = registerMutation.isPending || loginMutation.isPending;
-  const alternateMode = mode === "login" ? "register" : "login";
+  const isLoading = loginMutation.isPending;
 
   async function handleSubmit(values: AuthFormValues) {
     try {
-      if (mode === "register") {
-        await registerMutation.mutateAsync({
-          name: values.name ?? "",
-          email: values.email,
-          password: values.password,
-        });
-      }
-
       const tokenResponse = await loginMutation.mutateAsync({
         email: values.email,
         password: values.password,
@@ -48,7 +33,7 @@ export function AuthRoute({ mode }: AuthRouteProps) {
       setAuthenticated(true);
       queryClient.removeQueries({ queryKey: ["auth"] });
       await queryClient.invalidateQueries({ queryKey: ["auth"] });
-      toast.info(mode === "register" ? "Tài khoản đã được tạo. Đang mở workspace..." : "Đăng nhập thành công.");
+      toast.info("Đăng nhập thành công.");
       router.replace("/dashboard");
     } catch (apiError) {
       toast.error(apiError instanceof Error ? apiError.message : "Không thể xử lý yêu cầu. Vui lòng thử lại.");
@@ -75,11 +60,9 @@ export function AuthRoute({ mode }: AuthRouteProps) {
           </Button>
 
           <div className="reveal max-w-2xl">
-            <p className="eyebrow text-primary">
-              {mode === "register" ? "Create operator account" : "Operator access"}
-            </p>
+            <p className="eyebrow text-primary">Operator access</p>
             <h1 className="text-balance mt-5 text-4xl font-bold leading-[1.02] tracking-[-0.045em] sm:text-6xl">
-              {mode === "register" ? "Khởi tạo trung tâm vận hành của bạn." : "Tiếp tục phiên điều phối thông minh."}
+              Tiếp tục phiên điều phối thông minh.
             </h1>
             <p className="mt-6 max-w-xl text-base leading-7 text-muted-foreground">
               Truy cập AI Agent để tổng hợp tín hiệu thời tiết, mùa vụ và thị trường trong một luồng làm việc bảo mật.
@@ -101,24 +84,15 @@ export function AuthRoute({ mode }: AuthRouteProps) {
           </div>
 
           <p className="max-w-xl text-sm leading-6 text-muted-foreground">
-            {mode === "register" ? "Đã có tài khoản?" : "Chưa có tài khoản?"}{" "}
-            <Button
-              asChild
-              variant="link"
-              className="inline-flex"
-            >
-              <Link href={`/${alternateMode}`}>{mode === "register" ? "Đăng nhập" : "Đăng ký"}</Link>
-            </Button>
+            Chưa có tài khoản? Vui lòng liên hệ quản trị viên để được cấp quyền.
           </p>
         </div>
 
         <div className="flex items-center lg:py-12">
           <div className="reveal reveal-delay-1 w-full">
             <div className="mb-6">
-              <p className="eyebrow text-muted-foreground">{mode === "register" ? "New account" : "Welcome back"}</p>
-              <h2 className="mt-2 text-2xl font-bold tracking-[-0.03em]">
-                {mode === "register" ? "Tạo tài khoản" : "Đăng nhập"}
-              </h2>
+              <p className="eyebrow text-muted-foreground">Welcome back</p>
+              <h2 className="mt-2 text-2xl font-bold tracking-[-0.03em]">Đăng nhập</h2>
             </div>
 
             {isAuthenticated ? (
@@ -131,8 +105,6 @@ export function AuthRoute({ mode }: AuthRouteProps) {
             ) : (
               <AuthPanel
                 isLoading={isLoading}
-                mode={mode}
-                onModeChange={(nextMode) => router.push(`/${nextMode}`)}
                 onSubmit={handleSubmit}
               />
             )}

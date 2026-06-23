@@ -10,7 +10,6 @@ export type TelemetryResponse = {
   data: TelemetryReading[];
   meta: {
     count: number;
-    limit: number;
     latest_timestamp: string | null;
   };
 };
