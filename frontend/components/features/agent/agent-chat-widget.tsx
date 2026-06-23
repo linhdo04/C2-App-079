@@ -13,7 +13,7 @@ import { ApiError, requestProtectedEventStream } from "@/lib/api-client";
 import { useChatQuery, useChatsQuery, useCreateChatMutation, useDeleteChatMutation } from "@/lib/api-hooks";
 import { cn } from "@/lib/utils";
 import type { AgentQuestionFormValues } from "@/lib/validation";
-import type { ChatMessage, ChatMessageResponse } from "@/types/agent";
+import type { ChatDetail, ChatMessage, ChatMessageResponse } from "@/types/agent";
 
 export function AgentChatWidget() {
   const pathname = usePathname();
@@ -25,7 +25,6 @@ export function AgentChatWidget() {
   const widgetRef = useRef<HTMLDivElement>(null);
   const tokenBufferRef = useRef("");
   const animationFrameRef = useRef<number | null>(null);
-  const skipNextQueryOpenRef = useRef(false);
   const searchParamsString = searchParams.toString();
   const rawChatId = searchParams.get("chat");
   const parsedChatId = rawChatId === null ? null : Number(rawChatId);
@@ -77,14 +76,9 @@ export function AgentChatWidget() {
         const frame = window.requestAnimationFrame(() => setCreatedChatId(null));
         return () => window.cancelAnimationFrame(frame);
       }
-      if (skipNextQueryOpenRef.current) {
-        skipNextQueryOpenRef.current = false;
-        return;
-      }
       const frame = window.requestAnimationFrame(() => setIsOpen(true));
       return () => window.cancelAnimationFrame(frame);
     }
-    skipNextQueryOpenRef.current = false;
   }, [chatId, createdChatId, rawChatId, replaceChatQuery]);
 
   useEffect(() => {
@@ -151,10 +145,16 @@ export function AgentChatWidget() {
   const displayMessages = useMemo(() => {
     const pendingMessages: ChatMessage[] = [];
     const timestamp = new Date().toISOString();
-    if (pendingQuestion.length > 0) {
+    const hasPersistedPendingQuestion = messages.some(
+      (message) => message.role === "user" && message.message === pendingQuestion,
+    );
+    const hasPersistedStreamingAnswer = messages.some(
+      (message) => message.role === "assistant" && message.message === streamingAnswer,
+    );
+    if (pendingQuestion.length > 0 && !hasPersistedPendingQuestion) {
       pendingMessages.push({ id: -1, role: "user", message: pendingQuestion, timestamp });
     }
-    if (streamingAnswer.length > 0) {
+    if (streamingAnswer.length > 0 && !hasPersistedStreamingAnswer) {
       pendingMessages.push({ id: -2, role: "assistant", message: streamingAnswer, timestamp });
     }
     return [...messages, ...pendingMessages];
@@ -211,15 +211,18 @@ export function AgentChatWidget() {
       }
 
       const result = completedResponse as ChatMessageResponse;
-      queryClient.setQueryData(["agent", "chats", currentChatId], {
+      const chatQueryKey = ["agent", "chats", currentChatId] as const;
+      const cachedChat = queryClient.getQueryData<ChatDetail>(chatQueryKey);
+      setPendingQuestion("");
+      setStreamingAnswer("");
+      setStreamingStatus("");
+      tokenBufferRef.current = "";
+      queryClient.setQueryData<ChatDetail>(chatQueryKey, {
+        ...(cachedChat ?? result.chat),
         ...result.chat,
-        messages: [...messages, result.user_message, result.assistant_message],
+        messages: appendUniqueMessages(cachedChat?.messages ?? messages, result.user_message, result.assistant_message),
       });
-      await queryClient.invalidateQueries({ queryKey: ["agent", "chats"], exact: false });
-      if (chatId === null) {
-        skipNextQueryOpenRef.current = !isOpen;
-        replaceChatQuery(currentChatId);
-      }
+      void queryClient.invalidateQueries({ predicate: isAgentChatListQuery });
       return true;
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Không thể gửi câu hỏi. Vui lòng thử lại.");
@@ -403,6 +406,24 @@ export function AgentChatWidget() {
       </div>
     </>
   );
+}
+
+function appendUniqueMessages(messages: ChatMessage[], ...nextMessages: ChatMessage[]) {
+  const seenIds = new Set(messages.map((message) => message.id));
+  const merged = [...messages];
+  for (const message of nextMessages) {
+    if (seenIds.has(message.id)) {
+      continue;
+    }
+    seenIds.add(message.id);
+    merged.push(message);
+  }
+  return merged;
+}
+
+function isAgentChatListQuery(query: { queryKey: readonly unknown[] }) {
+  const [scope, resource, filter] = query.queryKey;
+  return scope === "agent" && resource === "chats" && typeof filter === "string";
 }
 
 function WidgetState({ action, icon, message }: { action?: ReactNode; icon: ReactNode; message: string }) {

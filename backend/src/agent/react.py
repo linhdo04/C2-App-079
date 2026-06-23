@@ -219,7 +219,11 @@ _COMPLETE_DATE_PATTERN = re.compile(
     r")",
     re.IGNORECASE,
 )
-_TELEMETRY_NO_DATA_MARKER = "Không có dữ liệu nhiệt độ hoặc độ ẩm"
+_TELEMETRY_NO_DATA_MARKERS = (
+    "Không có dữ liệu nhiệt độ hoặc độ ẩm",
+    "Không có dữ liệu nhiệt độ",
+    "Không có dữ liệu độ ẩm",
+)
 
 
 def _has_explicit_external_search_intent(goal: str) -> bool:
@@ -230,7 +234,7 @@ def _has_empty_telemetry_observation(memory: Memory) -> bool:
     return any(
         step.action is not None
         and step.action.tool == "telemetry"
-        and _TELEMETRY_NO_DATA_MARKER in step.observation
+        and any(marker in step.observation for marker in _TELEMETRY_NO_DATA_MARKERS)
         for step in memory.steps()
     )
 
@@ -239,6 +243,23 @@ def _has_ambiguous_day_only_date(goal: str) -> bool:
     return (
         _AMBIGUOUS_DAY_ONLY_PATTERN.search(goal) is not None
         and _COMPLETE_DATE_PATTERN.search(goal) is None
+    )
+
+
+def _should_skip_tool_policy_after_terminal_telemetry(
+    goal: str,
+    memory: Memory,
+) -> bool:
+    if _has_explicit_external_search_intent(goal):
+        return False
+    steps = memory.steps()
+    if not steps:
+        return False
+    last_action = steps[-1].action
+    return (
+        last_action is not None
+        and last_action.tool == "telemetry"
+        and "query_kinds" in last_action.input
     )
 
 
@@ -258,11 +279,7 @@ def _decision_guard_response(
             "telemetry nội bộ khi bạn chưa yêu cầu nguồn bên ngoài. Bạn có thể "
             "chọn khoảng thời gian khác hoặc kiểm tra thiết bị đã gửi dữ liệu chưa."
         )
-    if (
-        action.tool == "telemetry"
-        and ("start_time" in action.input or "end_time" in action.input)
-        and _has_ambiguous_day_only_date(goal)
-    ):
+    if action.tool == "telemetry" and _has_ambiguous_day_only_date(goal):
         return (
             "Bạn vui lòng cung cấp đầy đủ ngày, tháng và năm cho khoảng thời gian "
             "cần xem telemetry, ví dụ: 18/06/2026. Câu hỏi hiện chỉ nêu “ngày 18” "
@@ -604,6 +621,10 @@ class AgentLoop:
                                 safe_goal, active_memory, tools
                             )
                             if self.tool_policy is not None
+                            and not _should_skip_tool_policy_after_terminal_telemetry(
+                                safe_goal,
+                                active_memory,
+                            )
                             else None
                         )
                         if policy_action is not None:

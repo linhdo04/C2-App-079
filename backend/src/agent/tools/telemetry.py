@@ -19,6 +19,12 @@ from models.telemetry import TelemetryModel
 from ..react import Tool, ToolContext
 
 LOCAL_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
+TelemetryQueryKind = Literal[
+    "temperature_max",
+    "temperature_min",
+    "humidity_max",
+    "humidity_min",
+]
 RelativeTelemetryRange = Literal[
     "last_7_days",
     "last_30_days",
@@ -33,6 +39,15 @@ RelativeTelemetryRange = Literal[
 
 class TelemetryInput(BaseModel):
     limit: int = Field(default=50, ge=1, le=100)
+    query_kinds: list[TelemetryQueryKind] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=4,
+        description=(
+            "Specific telemetry facts to query. Use temperature_max/min or "
+            "humidity_max/min when the user asks for highest/lowest values."
+        ),
+    )
     relative_range: RelativeTelemetryRange | None = None
     start_time: datetime | None = None
     end_time: datetime | None = None
@@ -45,6 +60,8 @@ class TelemetryInput(BaseModel):
             and _to_utc(self.start_time) >= _to_utc(self.end_time)
         ):
             raise ValueError("start_time must be before end_time")
+        if self.query_kinds is not None:
+            self.query_kinds = list(dict.fromkeys(self.query_kinds))
         return self
 
 
@@ -80,6 +97,10 @@ class TelemetryTool(Tool):
         if context.user_id is None:
             return "Không thể truy vấn telemetry khi thiếu thông tin người dùng."
         time_range = _resolve_time_range(data, context.goal)
+        if data.query_kinds is not None and time_range is None:
+            time_range = _relative_range("today")
+        if data.query_kinds is not None:
+            return await _execute_specific_queries(data, context.user_id, time_range)
         statement = _latest_telemetry_statement(context.user_id, time_range)
         if time_range is None:
             statement = statement.limit(data.limit)
@@ -125,7 +146,7 @@ class TelemetryTool(Tool):
                 heading,
                 f"- Mission gần nhất: {mission}",
                 f"- Thiết bị gần nhất: {node}",
-                f"- Thời điểm mẫu mới nhất: {latest.timestamp.isoformat()}",
+                f"- Thời điểm mẫu mới nhất: {_format_local_datetime(latest.timestamp)}",
                 (
                     _aggregate_summary(
                         "Nhiệt độ",
@@ -163,6 +184,30 @@ class TelemetryTool(Tool):
         )
 
 
+async def _execute_specific_queries(
+    data: TelemetryInput,
+    user_id: int,
+    time_range: TelemetryTimeRange | None,
+) -> str:
+    assert data.query_kinds is not None
+    lines = [
+        (
+            f"Truy vấn telemetry theo chỉ số trong {time_range.label}:"
+            if time_range is not None
+            else f"Truy vấn telemetry theo chỉ số trong {data.limit} mẫu mới nhất:"
+        )
+    ]
+    async with db_session() as session:
+        for query_kind in data.query_kinds:
+            statement = _specific_telemetry_statement(user_id, time_range, query_kind)
+            if time_range is None:
+                statement = statement.limit(data.limit)
+            rows = list((await session.execute(statement.limit(1))).all())
+            lines.append(_specific_query_summary(query_kind, rows, time_range))
+    lines.append("- Đây là số đo lịch sử, không phải dự báo thời tiết.")
+    return "\n".join(lines)
+
+
 def _latest_telemetry_statement(
     user_id: int, time_range: TelemetryTimeRange | None
 ) -> Any:
@@ -176,6 +221,38 @@ def _latest_telemetry_statement(
         .join(MissionModel, cast(Any, IoTNodeModel.mission_id == MissionModel.id))
         .where(*_telemetry_filters(user_id, time_range))
         .order_by(cast(Any, TelemetryModel.timestamp).desc())
+    )
+    return statement
+
+
+def _specific_telemetry_statement(
+    user_id: int,
+    time_range: TelemetryTimeRange | None,
+    query_kind: TelemetryQueryKind,
+) -> Any:
+    field = _query_field(query_kind)
+    order_by_value = (
+        cast(Any, field).asc()
+        if query_kind.endswith("_min")
+        else cast(Any, field).desc()
+    )
+    statement = (
+        select(
+            TelemetryModel,
+            cast(Any, IoTNodeModel.name),
+            cast(Any, MissionModel.name),
+        )
+        .join(IoTNodeModel, cast(Any, TelemetryModel.iot_node_id == IoTNodeModel.id))
+        .join(MissionModel, cast(Any, IoTNodeModel.mission_id == MissionModel.id))
+        .where(
+            *_telemetry_filters(user_id, time_range),
+            cast(ColumnElement[bool], cast(Any, field).is_not(None)),
+        )
+        .order_by(
+            order_by_value,
+            cast(Any, TelemetryModel.timestamp).desc(),
+            cast(Any, TelemetryModel.id).desc(),
+        )
     )
     return statement
 
@@ -242,6 +319,12 @@ def _parse_aggregate_row(row: Any) -> TelemetryAggregate:
 
 def _optional_float(value: Any) -> float | None:
     return float(value) if value is not None else None
+
+
+def _query_field(query_kind: TelemetryQueryKind) -> Any:
+    if query_kind.startswith("temperature"):
+        return TelemetryModel.temperature_celsius
+    return TelemetryModel.humidity_percent
 
 
 def _resolve_time_range(
@@ -480,7 +563,12 @@ def _to_utc(value: datetime) -> datetime:
 
 
 def _range_label(start: datetime, end: datetime) -> str:
-    return f"từ {_to_utc(start).isoformat()} đến trước {_to_utc(end).isoformat()}"
+    return f"từ {_format_local_datetime(start)} đến trước {_format_local_datetime(end)}"
+
+
+def _format_local_datetime(value: datetime) -> str:
+    local_value = _to_utc(value).astimezone(LOCAL_TIMEZONE)
+    return f"{local_value:%H:%M:%S ngày %d/%m/%Y} (giờ Việt Nam)"
 
 
 def _summary(label: str, unit: str, values: list[float]) -> str:
@@ -515,8 +603,49 @@ def _aggregate_summary(
     )
 
 
+def _specific_query_summary(
+    query_kind: TelemetryQueryKind,
+    rows: list[Any],
+    time_range: TelemetryTimeRange | None,
+) -> str:
+    label, unit, stat_label = _query_display(query_kind)
+    range_text = _query_range_text(time_range)
+    if not rows:
+        return f"- Không có dữ liệu {label.casefold()}{range_text}."
+    telemetry, node, mission = rows[0]
+    value = (
+        telemetry.temperature_celsius
+        if query_kind.startswith("temperature")
+        else telemetry.humidity_percent
+    )
+    return (
+        f"- {label} {stat_label}{range_text}: {float(value):.1f}{unit}; "
+        f"thời điểm {_format_local_datetime(telemetry.timestamp)}; "
+        f"thiết bị {node}; mission {mission}"
+    )
+
+
+def _query_display(query_kind: TelemetryQueryKind) -> tuple[str, str, str]:
+    if query_kind == "temperature_max":
+        return "Nhiệt độ", "°C", "cao nhất"
+    if query_kind == "temperature_min":
+        return "Nhiệt độ", "°C", "thấp nhất"
+    if query_kind == "humidity_max":
+        return "Độ ẩm", "%", "cao nhất"
+    return "Độ ẩm", "%", "thấp nhất"
+
+
+def _query_range_text(time_range: TelemetryTimeRange | None) -> str:
+    if time_range is None:
+        return ""
+    if time_range.label.startswith("từ "):
+        return f" {time_range.label}"
+    return f" trong {time_range.label}"
+
+
 __all__ = [
     "TelemetryInput",
+    "TelemetryQueryKind",
     "TelemetryTimeRange",
     "TelemetryTool",
 ]

@@ -1,7 +1,7 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { ArrowUp, Bot, CloudSun, Leaf, LineChart, Search, Sparkles } from "lucide-react";
+import { ArrowUp } from "lucide-react";
 import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { FieldError } from "@/components/ui/field";
@@ -9,7 +9,9 @@ import { Spinner } from "@/components/ui/spinner";
 import { agentQuestionSchema, type AgentQuestionFormValues } from "@/lib/validation";
 import { cn } from "@/lib/utils";
 import type { ChatMessage } from "@/types/agent";
-import MarkdownMessage from "./markdown-message";
+import EmptyConversation from "./empty-conversation";
+import StreamingStatus from "./streaming-status";
+import MessageRow from "./message-row";
 
 type AgentQuestionPanelProps = {
   isLoading: boolean;
@@ -148,122 +150,5 @@ export function AgentQuestionPanel({ isLoading, messages, streamingStatus = "", 
         </form>
       </div>
     </section>
-  );
-}
-
-function MessageRow({ message }: { message: ChatMessage }) {
-  const isUser = message.role === "user";
-
-  if (isUser) {
-    return (
-      <div className="flex justify-end">
-        <div className="max-w-[88%] rounded-2xl border border-primary/15 bg-primary/10 px-4 py-2.5 text-sm leading-6 text-foreground">
-          <p className="whitespace-pre-wrap">{message.message}</p>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <article className="group flex items-start gap-3">
-      <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground shadow-[0_8px_24px_rgb(185_243_74/0.12)]">
-        <Leaf className="size-4" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="mb-2 text-sm font-bold text-foreground">AeroField</p>
-        <MarkdownMessage content={message.message} />
-      </div>
-    </article>
-  );
-}
-
-function StreamingStatus({ message }: { message: string }) {
-  return (
-    <div className="flex items-start gap-3">
-      <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground shadow-[0_8px_24px_rgb(185_243_74/0.12)]">
-        <Leaf className="size-4" />
-      </span>
-      <div className="pt-1">
-        <p className="mb-2 text-sm font-bold text-foreground">AeroField</p>
-        <p className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span className="flex gap-1">
-            <span className="size-1.5 animate-pulse rounded-full bg-primary/70" />
-            <span className="size-1.5 animate-pulse rounded-full bg-primary/70 [animation-delay:150ms]" />
-            <span className="size-1.5 animate-pulse rounded-full bg-primary/70 [animation-delay:300ms]" />
-          </span>
-          {message}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function EmptyConversation({ onSelect }: { onSelect: (text: string) => void }) {
-  return (
-    <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center px-4 pt-8 pb-32">
-      <div className="mx-auto w-full">
-        <div className="flex items-center justify-center gap-3">
-          <span className="grid size-11 place-items-center rounded-xl bg-primary text-primary-foreground shadow-[0_12px_36px_rgb(185_243_74/0.16)]">
-            <Leaf className="size-5" />
-          </span>
-          <Sparkles className="size-5 text-primary/45" />
-        </div>
-        <p className="eyebrow mt-5 text-center text-primary">AI field assistant</p>
-        <h2 className="mt-2 text-center text-xl font-bold tracking-[-0.035em] text-foreground">
-          Hôm nay tôi có thể giúp gì?
-        </h2>
-        <p className="mx-auto mt-2 max-w-sm text-center text-xs leading-5 text-muted-foreground">
-          Hỏi về thời tiết, mùa vụ, kỹ thuật canh tác hoặc dữ liệu vận hành nông nghiệp.
-        </p>
-
-        <div className="mt-5 grid grid-cols-2 gap-2">
-          <Suggestion
-            icon={CloudSun}
-            title="Kiểm tra thời tiết"
-            text="Thời tiết tuần này ảnh hưởng thế nào đến lịch canh tác?"
-            onSelect={onSelect}
-          />
-          <Suggestion
-            icon={LineChart}
-            title="Phân tích mùa vụ"
-            text="Ước tính sản lượng lúa với 10 ha và năng suất 6 tấn/ha."
-            onSelect={onSelect}
-          />
-          <Suggestion
-            icon={Search}
-            title="Tìm thông tin mới"
-            text="Tìm kỹ thuật phòng trừ sâu bệnh mới nhất cho cây lúa."
-            onSelect={onSelect}
-          />
-          <Suggestion
-            icon={Bot}
-            title="Tư vấn canh tác"
-            text="Gợi ý kế hoạch chăm sóc cây trồng phù hợp với điều kiện Việt Nam."
-            onSelect={onSelect}
-          />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-type SuggestionProps = {
-  icon: typeof CloudSun;
-  title: string;
-  text: string;
-  onSelect: (text: string) => void;
-};
-
-function Suggestion({ icon: Icon, onSelect, text, title }: SuggestionProps) {
-  return (
-    <button
-      className="group min-h-24 rounded-xl border border-border/70 bg-card/55 p-3 text-left transition hover:border-primary/30 hover:bg-secondary/70 focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none"
-      type="button"
-      onClick={() => onSelect(text)}
-    >
-      <Icon className="size-4 text-primary/80 transition group-hover:text-primary" />
-      <span className="mt-3 block text-sm font-bold text-foreground">{title}</span>
-      <span className="mt-1 line-clamp-2 block text-xs leading-5 text-muted-foreground">{text}</span>
-    </button>
   );
 }
