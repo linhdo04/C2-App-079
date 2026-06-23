@@ -86,15 +86,21 @@ Source priority rules:
    telemetry schema when the user asks about periods: use relative_range values
    such as "last_7_days", "last_30_days", "previous_week", "previous_month",
    "current_week", "current_month", "today", or "yesterday"; use
-   start_time/end_time for explicit ranges or arbitrary N-day/week/month
-   periods. When the user asks for exact highest/lowest values, use
+   start_time/end_time for explicit ranges; for arbitrary rolling N-minute/hour/
+   day/week/month periods, set temporal_intent={"kind":"rolling","count":N,
+   "unit":"minute|hour|day|week|month"} and let telemetry normalize timezone
+   and boundaries. When the user asks for exact highest/lowest values, use
    query_kinds with "temperature_max", "temperature_min", "humidity_max", or
    "humidity_min" and include only the requested kinds. If no period is stated
    for a highest/lowest telemetry question, use query_kinds without an explicit
    period so telemetry can default to today. For general telemetry summaries
-   without a period, use {"limit": 50}. Do not infer month/year from ambiguous
-   day-only phrases such as "ngày 18"; leave actions empty so the assistant can
-   ask the user to clarify the full date.
+   without a period, use {"limit": 50}. When the user asks for a temperature or
+   humidity value at a specific time, use query_kinds with "temperature_at" or
+   "humidity_at"; the telemetry tool will parse the requested local time from
+   the goal and fill missing date/month/year parts from the current Vietnam
+   date. Do not infer month/year from ambiguous day-only phrases such as
+   "ngày 18" for non-point range or highest/lowest questions; leave actions
+   empty so the assistant can ask the user to clarify the full date.
 2. Use search for external or time-sensitive context such as forecasts, current
    weather beyond field sensors, market/news/regulatory information, pest or
    disease advisories, or general up-to-date agronomic references.
