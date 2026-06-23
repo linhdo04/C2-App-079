@@ -18,7 +18,7 @@ export function useCurrentUserQuery(isAuthenticated: boolean) {
 export function useDashboardTelemetryQuery() {
   return useQuery({
     queryKey: ["dashboard", "telemetry"],
-    queryFn: () => requestProtected<TelemetryResponse>("/dashboard/telemetry?limit=24"),
+    queryFn: () => requestProtected<TelemetryResponse>("/dashboard/telemetry"),
     refetchInterval: 60_000,
   });
 }
