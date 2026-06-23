@@ -46,7 +46,6 @@ export function EnvironmentDashboard() {
   return (
     <DashboardContent
       readings={telemetryQuery.data.data}
-      sampleLimit={telemetryQuery.data.meta.limit}
       isRefreshing={telemetryQuery.isFetching}
       onRefresh={() => telemetryQuery.refetch()}
     />

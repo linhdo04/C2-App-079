@@ -4,7 +4,10 @@ from typing import Any
 import pytest
 from fastapi import HTTPException
 
-from api.routes.dashboard_routes import list_environment_telemetry
+from api.routes.dashboard_routes import (
+    _current_local_day_utc_range,
+    list_environment_telemetry,
+)
 from models.telemetry import TelemetryModel
 from models.user import UserModel
 
@@ -36,9 +39,26 @@ def user_factory(user_id: int | None = 7) -> UserModel:
     )
 
 
+def test_current_local_day_range_uses_vietnam_timezone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "api.routes.dashboard_routes.get_utc_now",
+        lambda: datetime(2026, 6, 23, 4, 30, tzinfo=UTC),
+    )
+
+    start, end = _current_local_day_utc_range()
+
+    assert start == datetime(2026, 6, 22, 17, 0, tzinfo=UTC)
+    assert end == datetime(2026, 6, 23, 17, 0, tzinfo=UTC)
+
+
 @pytest.mark.asyncio
-async def test_list_environment_telemetry_returns_chronological_user_data() -> None:
-    now = datetime.now(UTC)
+async def test_list_environment_telemetry_returns_current_day_chronological_user_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 6, 23, 4, 30, tzinfo=UTC)
+    monkeypatch.setattr("api.routes.dashboard_routes.get_utc_now", lambda: now)
     latest = TelemetryModel(
         id=3,
         iot_node_id=3,
@@ -71,7 +91,6 @@ async def test_list_environment_telemetry_returns_chronological_user_data() -> N
     response = await list_environment_telemetry(
         user_factory(),
         session,  # type: ignore[arg-type]
-        limit=24,
     )
 
     assert [reading.timestamp for reading in response.data] == [
@@ -88,28 +107,33 @@ async def test_list_environment_telemetry_returns_chronological_user_data() -> N
     assert response.data[-1].humidity_percent == 68.0
     assert response.data[-1].node_name == "Cảm biến 03"
     assert response.meta.count == 3
-    assert response.meta.limit == 24
     assert response.meta.latest_timestamp == latest.timestamp
     statement = str(session.statements[0])
     assert "missions.owner_id" in statement
     assert "telemetry.temperature_celsius IS NOT NULL" in statement
+    assert "telemetry.timestamp >= " in statement
+    assert "telemetry.timestamp < " in statement
     assert "telemetry.timestamp DESC, telemetry.id DESC" in statement
-    assert session.statements[0]._limit_clause.value == 24
+    assert session.statements[0]._limit_clause is None
 
 
 @pytest.mark.asyncio
-async def test_list_environment_telemetry_returns_empty_list_without_samples() -> None:
+async def test_list_environment_telemetry_returns_empty_list_without_samples(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "api.routes.dashboard_routes.get_utc_now",
+        lambda: datetime(2026, 6, 23, 4, 30, tzinfo=UTC),
+    )
     session = FakeSession([])
 
     response = await list_environment_telemetry(
         user_factory(),
         session,  # type: ignore[arg-type]
-        limit=10,
     )
 
     assert response.data == []
     assert response.meta.count == 0
-    assert response.meta.limit == 10
     assert response.meta.latest_timestamp is None
 
 
@@ -121,7 +145,6 @@ async def test_list_environment_telemetry_rejects_user_without_id() -> None:
         await list_environment_telemetry(
             user_factory(None),
             session,  # type: ignore[arg-type]
-            limit=24,
         )
 
     assert exc_info.value.status_code == 401

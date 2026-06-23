@@ -6,7 +6,6 @@ import { averageDetail, formatDateTime, formatMetric } from "./dashboard-utils";
 
 type DashboardOverviewProps = {
   readings: TelemetryReading[];
-  sampleLimit: number;
   latest: TelemetryReading;
   temperatures: ChartPoint[];
   humidities: ChartPoint[];
@@ -16,7 +15,6 @@ type DashboardOverviewProps = {
 
 export function DashboardOverview({
   readings,
-  sampleLimit,
   latest,
   temperatures,
   humidities,
@@ -78,9 +76,9 @@ export function DashboardOverview({
         />
         <MetricCard
           icon={Database}
-          label="Số mẫu hiển thị"
+          label="Số mẫu hôm nay"
           value={String(readings.length)}
-          detail={`Tối đa ${sampleLimit} mẫu gần nhất`}
+          detail="Tất cả dữ liệu trong ngày"
           accent="text-primary"
         />
         <MetricCard

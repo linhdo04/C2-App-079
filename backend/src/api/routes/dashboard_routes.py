@@ -1,7 +1,8 @@
-from datetime import datetime
+from datetime import UTC, datetime, time, timedelta
 from typing import Annotated, Any, cast
+from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,12 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.dependencies import get_current_user
 from api.responses import CollectionMeta, CollectionResponse
 from infrastructure.database.postgres import get_session
+from models.base import get_utc_now
 from models.iot_node import IoTNodeModel
 from models.mission import MissionModel
 from models.telemetry import TelemetryModel
 from models.user import UserModel
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
+LOCAL_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
 
 
 class TelemetryReadingPublic(BaseModel):
@@ -26,7 +29,6 @@ class TelemetryReadingPublic(BaseModel):
 
 
 class TelemetryMeta(CollectionMeta):
-    limit: int
     latest_timestamp: datetime | None
 
 
@@ -38,11 +40,11 @@ class TelemetryListResponse(CollectionResponse[TelemetryReadingPublic]):
 async def list_environment_telemetry(
     current_user: Annotated[UserModel, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
-    limit: Annotated[int, Query(ge=1, le=100)] = 24,
 ) -> TelemetryListResponse:
     if current_user.id is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
+    start_of_day, start_of_next_day = _current_local_day_utc_range()
     statement = (
         select(
             TelemetryModel,
@@ -71,6 +73,14 @@ async def list_environment_telemetry(
                 ColumnElement[bool],
                 cast(Any, TelemetryModel.deleted_at).is_(None),
             ),
+            cast(
+                ColumnElement[bool],
+                cast(Any, TelemetryModel.timestamp) >= start_of_day,
+            ),
+            cast(
+                ColumnElement[bool],
+                cast(Any, TelemetryModel.timestamp) < start_of_next_day,
+            ),
             or_(
                 cast(Any, TelemetryModel.temperature_celsius).is_not(None),
                 cast(Any, TelemetryModel.humidity_percent).is_not(None),
@@ -80,7 +90,6 @@ async def list_environment_telemetry(
             cast(Any, TelemetryModel.timestamp).desc(),
             cast(Any, TelemetryModel.id).desc(),
         )
-        .limit(limit)
     )
     result = await session.execute(statement)
 
@@ -99,7 +108,13 @@ async def list_environment_telemetry(
         data=readings,
         meta=TelemetryMeta(
             count=len(readings),
-            limit=limit,
             latest_timestamp=readings[-1].timestamp if readings else None,
         ),
     )
+
+
+def _current_local_day_utc_range() -> tuple[datetime, datetime]:
+    current = get_utc_now().astimezone(LOCAL_TIMEZONE)
+    start = datetime.combine(current.date(), time.min, tzinfo=LOCAL_TIMEZONE)
+    end = start + timedelta(days=1)
+    return start.astimezone(UTC), end.astimezone(UTC)
