@@ -4,6 +4,7 @@ export type User = {
   id: number;
   name: string;
   email: string;
+  role: "operator" | "admin";
 };
 
 export type TokenResponse = {

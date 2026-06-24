@@ -5,6 +5,7 @@ import { requestApi, requestProtected } from "@/lib/api-client";
 import type { ApiResponse, CursorMeta } from "@/types/api";
 import type { AgentAskRequest, AgentResponse, ChatDetail, ChatMessageResponse, ChatSession } from "@/types/agent";
 import type { LoginRequest, RegisterRequest, TokenResponse, User } from "@/types/auth";
+import type { CostBudget, CostBudgetUpdateRequest, CostSummary, CostUsageResponse } from "@/types/cost-management";
 import type { TelemetryResponse } from "@/types/dashboard";
 
 export function useCurrentUserQuery(isAuthenticated: boolean) {
@@ -20,6 +21,33 @@ export function useDashboardTelemetryQuery() {
     queryKey: ["dashboard", "telemetry"],
     queryFn: () => requestProtected<TelemetryResponse>("/dashboard/telemetry"),
     refetchInterval: 60_000,
+  });
+}
+
+export function useCostSummaryQuery() {
+  return useQuery({
+    queryKey: ["admin", "cost-management", "summary"],
+    queryFn: () =>
+      requestProtected<ApiResponse<CostSummary>>("/admin/cost-management/summary").then((response) => response.data),
+    refetchInterval: 60_000,
+  });
+}
+
+export function useCostUsageQuery() {
+  return useQuery({
+    queryKey: ["admin", "cost-management", "usage"],
+    queryFn: () => requestProtected<CostUsageResponse>("/admin/cost-management/usage?limit=25"),
+    refetchInterval: 60_000,
+  });
+}
+
+export function useUpdateCostBudgetMutation() {
+  return useMutation({
+    mutationFn: (body: CostBudgetUpdateRequest) =>
+      requestProtected<ApiResponse<CostBudget>>("/admin/cost-management/budget", {
+        method: "PUT",
+        body: JSON.stringify(body),
+      }).then((response) => response.data),
   });
 }
 

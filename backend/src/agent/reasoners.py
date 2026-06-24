@@ -5,7 +5,7 @@ import json
 import re
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 import structlog
@@ -14,7 +14,9 @@ from pydantic import BaseModel, Field
 
 from .prompts import REACT_PROMPT, SYSTEM_PROMPT
 from .react import Action, Memory, Reasoner, ReasoningDecision, Tool, _was_action_called
+from .structured import bind_structured_output
 from .tracing import agent_span, langchain_config, update_observation
+from .usage import record_llm_usage
 
 logger = structlog.get_logger(__name__)
 
@@ -26,9 +28,9 @@ LLM_RETRYABLE_CODE_NAMES = {
     "INTERNAL",
 }
 
-# Gemini embeds the suggested retry delay in two places inside the 429 body:
+# Some providers embed the suggested retry delay in two places inside the 429 body:
 #   "Please retry in 28.823862733s"       (human-readable message, float seconds)
-#   'retryDelay': '28s'  or  "retryDelay": "28s"  (structured RetryInfo detail)
+#   'retryDelay': '28s'  or  "retryDelay": "28s"  (structured detail)
 _RETRY_DELAY_PATTERNS = (
     re.compile(r"retry in (\d+(?:\.\d+)?)s", re.IGNORECASE),
     re.compile(r"""['"]retryDelay['"]\s*:\s*['"](\d+(?:\.\d+)?)s['"]"""),
@@ -70,7 +72,9 @@ async def _ainvoke_llm_with_retry(
     allowed_attempts = max_retries + 1
     for attempt in range(1, allowed_attempts + 1):
         try:
-            return await asyncio.wait_for(invoke(), timeout=timeout_seconds)
+            response = await asyncio.wait_for(invoke(), timeout=timeout_seconds)
+            await record_llm_usage(response, operation=operation)
+            return response
         except Exception as exc:
             retryable = _is_retryable_llm_error(exc)
             should_retry = retryable and attempt < allowed_attempts
@@ -123,6 +127,9 @@ def _llm_error_metadata(
     code = _llm_error_code(exc)
     if code is not None:
         metadata["provider_code"] = code
+    message = _llm_provider_message(exc)
+    if message is not None:
+        metadata["provider_message"] = message
     # Use pre-computed value when available to avoid running the regex twice.
     delay = (
         server_delay if server_delay is not None else _extract_server_retry_delay(exc)
@@ -155,6 +162,14 @@ def _parse_status_code(value: Any) -> int | None:
 
 def _llm_error_code(exc: Exception) -> str | None:
     code = getattr(exc, "code", None)
+    if code is None:
+        body = getattr(exc, "body", None)
+        if isinstance(body, dict):
+            error = body.get("error")
+            if isinstance(error, dict):
+                code = error.get("code") or error.get("type")
+            else:
+                code = body.get("code") or body.get("type")
     if callable(code):
         try:
             code = code()
@@ -166,6 +181,30 @@ def _llm_error_code(exc: Exception) -> str | None:
     if isinstance(name, str):
         return name
     return str(code).rsplit(".", maxsplit=1)[-1]
+
+
+def _llm_provider_message(exc: Exception) -> str | None:
+    message = getattr(exc, "message", None)
+    if message is None:
+        body = getattr(exc, "body", None)
+        if isinstance(body, dict):
+            error = body.get("error")
+            if isinstance(error, dict):
+                message = error.get("message")
+            else:
+                message = body.get("message")
+    if not isinstance(message, str) or not message.strip():
+        return None
+    return _sanitize_provider_message(message)
+
+
+def _sanitize_provider_message(message: str, *, max_length: int = 240) -> str:
+    sanitized = re.sub(r"sk-[A-Za-z0-9_-]+", "[redacted]", message)
+    sanitized = re.sub(r"(?i)(api[_ -]?key\s*[:=]\s*)\S+", r"\1[redacted]", sanitized)
+    sanitized = re.sub(r"\s+", " ", sanitized).strip()
+    if len(sanitized) > max_length:
+        return sanitized[: max_length - 3].rstrip() + "..."
+    return sanitized
 
 
 @dataclass(frozen=True)
@@ -238,8 +277,8 @@ def classify_llm_error(exc: Exception) -> LLMErrorClassification:
     )
 
 
-class GeminiReasoner:
-    """Gemini-backed reasoner using a provider-neutral interface."""
+class LLMReasoner:
+    """LLM-backed reasoner using a provider-neutral interface."""
 
     def __init__(
         self,
@@ -250,10 +289,7 @@ class GeminiReasoner:
         backoff_seconds: float = 0.5,
     ) -> None:
         self._llm = llm
-        self._structured_llm = cast(Any, llm).bind(
-            response_mime_type="application/json",
-            response_schema=ReasoningDecision.model_json_schema(),
-        )
+        self._structured_llm = bind_structured_output(llm, ReasoningDecision)
         self._timeout_seconds = timeout_seconds
         self._max_retries = max_retries
         self._backoff_seconds = backoff_seconds
@@ -398,10 +434,7 @@ class LLMToolRouter:
         max_retries: int = 0,
         backoff_seconds: float = 0.5,
     ) -> None:
-        self._structured_llm = cast(Any, llm).bind(
-            response_mime_type="application/json",
-            response_schema=FallbackRouteDecision.model_json_schema(),
-        )
+        self._structured_llm = bind_structured_output(llm, FallbackRouteDecision)
         self._timeout_seconds = timeout_seconds
         self._max_retries = max_retries
         self._backoff_seconds = backoff_seconds
@@ -426,7 +459,9 @@ class LLMToolRouter:
                     "You are a fallback tool router. Select one available tool "
                     "that should gather evidence for the user goal. Do not answer "
                     "the user. Use only the provided tool names and input schemas. "
-                    "Return tool='none' only when no tool can help."
+                    "Return tool='none' only when no tool can help. "
+                    "Return valid JSON only. Do not wrap in markdown. "
+                    "Match the FallbackRouteDecision schema exactly."
                 )
             ),
             HumanMessage(
@@ -736,7 +771,7 @@ class FallbackReasoner:
             logger.warning(
                 "agent_provider_fallback",
                 operation="decide",
-                provider="gemini",
+                provider="llm",
                 error_type=type(exc).__name__,
             )
             return await self._fallback.decide(goal, memory, tools)
@@ -748,7 +783,7 @@ class FallbackReasoner:
             logger.warning(
                 "agent_provider_fallback",
                 operation="finalize",
-                provider="gemini",
+                provider="llm",
                 error_type=type(exc).__name__,
             )
             return await self._fallback.finalize(goal, memory)
@@ -757,7 +792,7 @@ class FallbackReasoner:
 __all__ = [
     "FallbackRouteDecision",
     "FallbackReasoner",
-    "GeminiReasoner",
+    "LLMReasoner",
     "LLMRoutedFallbackReasoner",
     "LLMToolRouter",
     "REACT_PROMPT",

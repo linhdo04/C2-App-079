@@ -409,7 +409,12 @@ async def test_register_success_normalizes_email_and_hides_password_hash() -> No
 
     assert response.status_code == 201
     assert response.json() == {
-        "data": {"id": 1, "name": "User", "email": "user@example.com"}
+        "data": {
+            "id": 1,
+            "name": "User",
+            "email": "user@example.com",
+            "role": "operator",
+        }
     }
     assert session.added_user is not None
     assert session.added_user.password_hash != "password123"
@@ -649,7 +654,12 @@ async def test_me_returns_current_user() -> None:
 
     assert response.status_code == 200
     assert response.json() == {
-        "data": {"id": 1, "name": "User", "email": "user@example.com"}
+        "data": {
+            "id": 1,
+            "name": "User",
+            "email": "user@example.com",
+            "role": "operator",
+        }
     }
 
 

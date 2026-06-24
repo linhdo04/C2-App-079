@@ -9,7 +9,7 @@ make check
 ```
 
 Unit tests dùng fake reasoner/tool, không cần network hay API cost. Integration
-Gemini phải opt-in bằng `RUN_AGENT_INTEGRATION_TESTS=1`.
+DeepSeek phải opt-in bằng `RUN_AGENT_INTEGRATION_TESTS=1`.
 
 Các contract bắt buộc cần test khi thay đổi agent:
 
@@ -21,4 +21,4 @@ Các contract bắt buộc cần test khi thay đổi agent:
 - incremental token và persistence chỉ sau final answer.
 - safe error không lộ exception/observation.
 
-Gemini và Tavily cần key tương ứng.
+DeepSeek và Tavily cần key tương ứng.
