@@ -21,7 +21,7 @@ export function SessionPanel({ accessTimeLeft, isLoading, refreshTimeLeft, user,
         <div className="h-1 bg-primary" />
         <CardHeader className="pb-4 sm:p-5 sm:pb-4">
           <div className="mb-2 flex items-center justify-between">
-            <p className="eyebrow text-primary">Operator online</p>
+            <p className="eyebrow text-primary">Người vận hành trực tuyến</p>
             <span className="relative flex size-2">
               <span className="absolute inline-flex size-full animate-ping rounded-full bg-success opacity-50" />
               <span className="relative inline-flex size-2 rounded-full bg-success" />

@@ -31,13 +31,13 @@ export function DashboardOverview({
         <div>
           <div className="mb-4 flex items-center gap-2 text-primary">
             <span className="size-2 rounded-full bg-primary shadow-[0_0_14px_var(--primary)]" />
-            <span className="eyebrow">{latest.node_name} · telemetry trực tuyến</span>
+            <span className="eyebrow">{latest.node_name} · dữ liệu cảm biến trực tuyến</span>
           </div>
           <h1 className="max-w-3xl text-4xl font-bold leading-[1.02] tracking-[-0.045em] sm:text-5xl">
             Vi khí hậu cánh đồng
           </h1>
           <p className="mt-4 max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
-            Dữ liệu nhiệt độ và độ ẩm thực tế từ các cảm biến thuộc mission của bạn.
+            Dữ liệu nhiệt độ và độ ẩm thực tế từ các cảm biến thuộc nhiệm vụ của bạn.
           </p>
         </div>
 
@@ -85,7 +85,7 @@ export function DashboardOverview({
           icon={RadioTower}
           label="Cảm biến"
           value={String(stationCount)}
-          detail="Thuộc mission của bạn"
+          detail="Thuộc nhiệm vụ của bạn"
           accent="text-success"
         />
       </dl>

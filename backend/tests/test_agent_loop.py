@@ -397,6 +397,73 @@ async def test_empty_specific_telemetry_blocks_implicit_search() -> None:
 
 
 @pytest.mark.asyncio
+async def test_empty_two_hour_specific_telemetry_blocks_implicit_search() -> None:
+    search_calls = 0
+
+    async def telemetry(tool_input: BaseModel, context: ToolContext) -> str:
+        data = TelemetryInput.model_validate(tool_input)
+        assert data.query_kinds == ["temperature_max"]
+        assert data.temporal_intent is not None
+        assert data.temporal_intent.count == 2
+        assert data.temporal_intent.unit == "hour"
+        return "Không có dữ liệu nhiệt độ trong 2 giờ qua."
+
+    async def search(tool_input: BaseModel, context: ToolContext) -> str:
+        nonlocal search_calls
+        search_calls += 1
+        return "web result"
+
+    reasoner = SequenceReasoner(
+        [
+            ReasoningDecision(
+                thought="Use telemetry.",
+                action=Action(
+                    tool="telemetry",
+                    input={
+                        "query_kinds": ["temperature_max"],
+                        "temporal_intent": {
+                            "kind": "rolling",
+                            "count": 2,
+                            "unit": "hour",
+                        },
+                    },
+                ),
+            ),
+            ReasoningDecision(
+                thought="Try web search.",
+                action=Action(
+                    tool="search",
+                    input={"query": "nhiệt độ cao nhất 2 tiếng vừa rồi"},
+                ),
+            ),
+        ]
+    )
+
+    result = await create_loop(
+        reasoner,
+        [
+            CallableTool(
+                "telemetry",
+                "Read temperature and humidity owned by the user.",
+                telemetry,
+                input_model=TelemetryInput,
+            ),
+            CallableTool(
+                "search",
+                "Search web",
+                search,
+                input_model=SearchInput,
+            ),
+        ],
+    ).run("trong hai tiếng vừa rồi nhiệt độ cao nhất là bao nhiêu?")
+
+    assert search_calls == 0
+    assert result.done is True
+    assert "Không có dữ liệu nhiệt độ hoặc độ ẩm" in result.final_response
+    assert "không dùng kết quả tìm kiếm web" in result.final_response
+
+
+@pytest.mark.asyncio
 async def test_empty_telemetry_allows_search_when_external_intent_is_explicit() -> None:
     search_calls = 0
 
@@ -532,6 +599,51 @@ async def test_ambiguous_day_only_specific_telemetry_query_asks_for_clarificatio
     assert result.done is True
     assert "ngày, tháng và năm" in result.final_response
     assert "không tự suy đoán tháng/năm" in result.final_response
+
+
+@pytest.mark.asyncio
+async def test_point_telemetry_query_with_missing_month_year_is_not_guarded() -> None:
+    telemetry_calls = 0
+
+    async def telemetry(tool_input: BaseModel, context: ToolContext) -> str:
+        nonlocal telemetry_calls
+        telemetry_calls += 1
+        data = TelemetryInput.model_validate(tool_input)
+        assert data.query_kinds == ["temperature_at"]
+        return "Nhiệt độ gần 12:18:00 ngày 18/06/2026: 31.0°C."
+
+    reasoner = SequenceReasoner(
+        [
+            ReasoningDecision(
+                thought="Use telemetry.",
+                action=Action(
+                    tool="telemetry",
+                    input={"query_kinds": ["temperature_at"]},
+                ),
+            ),
+            ReasoningDecision(
+                thought="Complete.",
+                is_done=True,
+                final_answer="Nhiệt độ gần 12:18 ngày 18 là 31.0°C.",
+            ),
+        ]
+    )
+
+    result = await create_loop(
+        reasoner,
+        [
+            CallableTool(
+                "telemetry",
+                "Read temperature and humidity owned by the user.",
+                telemetry,
+                input_model=TelemetryInput,
+            )
+        ],
+    ).run("nhiệt độ lúc 12:18 ngày 18 là bao nhiêu?")
+
+    assert telemetry_calls == 1
+    assert result.done is True
+    assert result.final_response == "Nhiệt độ gần 12:18 ngày 18 là 31.0°C."
 
 
 @pytest.mark.asyncio

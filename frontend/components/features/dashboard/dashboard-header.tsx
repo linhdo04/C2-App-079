@@ -2,6 +2,7 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { Home, LogOut, Radar } from "lucide-react";
+import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -17,6 +18,7 @@ export function DashboardHeader() {
   const clearAuth = useAuthStore((state) => state.clearAuth);
   const user = useAuthStore((state) => state.user);
   const logoutMutation = useLogoutMutation();
+  const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false);
 
   async function handleLogout() {
     try {
@@ -24,6 +26,7 @@ export function DashboardHeader() {
       queryClient.removeQueries({ queryKey: ["auth"] });
       clearAuth();
       router.replace(PublicRouter.Home);
+      setIsLogoutConfirmOpen(false);
       toast.success("Bạn đã đăng xuất thành công.");
     } catch {
       toast.error("Có lỗi xảy ra, vui lòng thử lại sau.");
@@ -43,14 +46,14 @@ export function DashboardHeader() {
         <div className="min-w-0">
           <span className="block text-base font-bold tracking-[-0.03em]">AeroField</span>
           <span className="hidden text-[0.62rem] font-bold uppercase tracking-[0.16em] text-muted-foreground sm:block">
-            Field operations
+            Vận hành cánh đồng
           </span>
         </div>
       </Link>
 
       <nav
         className="flex min-w-0 items-center gap-1 sm:gap-2"
-        aria-label="Điều hướng dashboard"
+        aria-label="Điều hướng bảng điều khiển"
       >
         <Button
           asChild
@@ -75,14 +78,82 @@ export function DashboardHeader() {
           <Button
             size="icon"
             variant="ghost"
-            aria-label={logoutMutation.isPending ? "Đang đăng xuất" : "Đăng xuất"}
+            aria-label={logoutMutation.isPending ? "Đang đăng xuất" : "Mở xác nhận đăng xuất"}
+            aria-haspopup="dialog"
+            aria-expanded={isLogoutConfirmOpen}
             disabled={logoutMutation.isPending}
-            onClick={handleLogout}
+            onClick={() => setIsLogoutConfirmOpen(true)}
           >
             {logoutMutation.isPending ? <Spinner /> : <LogOut />}
           </Button>
         </div>
       </nav>
+
+      {isLogoutConfirmOpen && (
+        <div
+          className="fixed inset-0 z-50 grid place-items-center bg-black/60 px-4 backdrop-blur-sm"
+          role="presentation"
+        >
+          <button
+            className="absolute inset-0"
+            type="button"
+            aria-label="Huỷ đăng xuất"
+            disabled={logoutMutation.isPending}
+            onClick={() => setIsLogoutConfirmOpen(false)}
+          />
+          <section
+            className="relative w-full max-w-sm rounded-[1.5rem] border border-border bg-card/95 p-5 text-foreground shadow-[0_30px_100px_rgb(0_0_0/0.45)] backdrop-blur-xl"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="logout-confirm-title"
+            aria-describedby="logout-confirm-description"
+          >
+            <span className="grid size-12 place-items-center rounded-2xl bg-destructive-muted text-destructive-text">
+              <LogOut className="size-5" />
+            </span>
+            <h2
+              id="logout-confirm-title"
+              className="mt-4 text-xl font-bold tracking-[-0.03em]"
+            >
+              Xác nhận đăng xuất
+            </h2>
+            <p
+              id="logout-confirm-description"
+              className="mt-2 text-sm leading-6 text-muted-foreground"
+            >
+              Bạn có chắc muốn kết thúc phiên làm việc hiện tại và quay về trang chủ không?
+            </p>
+            <div className="mt-6 grid gap-3 sm:grid-cols-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={logoutMutation.isPending}
+                onClick={() => setIsLogoutConfirmOpen(false)}
+              >
+                Huỷ
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={logoutMutation.isPending}
+                onClick={handleLogout}
+              >
+                {logoutMutation.isPending ? (
+                  <>
+                    <Spinner />
+                    Đang đăng xuất
+                  </>
+                ) : (
+                  <>
+                    <LogOut />
+                    Đăng xuất
+                  </>
+                )}
+              </Button>
+            </div>
+          </section>
+        </div>
+      )}
     </header>
   );
 }

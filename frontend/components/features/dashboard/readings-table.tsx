@@ -15,7 +15,7 @@ export function ReadingsTable({ readings }: ReadingsTableProps) {
             <Leaf className="size-4 text-primary" />
             <h2 className="text-lg font-bold tracking-[-0.025em]">Dữ liệu gần nhất</h2>
           </div>
-          <p className="mt-1 text-xs text-muted-foreground">Nhiệt độ và độ ẩm được trả về từ API telemetry</p>
+          <p className="mt-1 text-xs text-muted-foreground">Nhiệt độ và độ ẩm được trả về từ API dữ liệu cảm biến</p>
         </div>
         <span className="hidden rounded-full border border-success/20 bg-success-muted px-3 py-1.5 text-[0.65rem] font-bold text-success-foreground sm:inline-flex">
           {readings.length} mẫu
@@ -25,7 +25,7 @@ export function ReadingsTable({ readings }: ReadingsTableProps) {
       <div
         className="max-h-[26rem] overflow-auto overscroll-contain sm:max-h-[32rem]"
         role="region"
-        aria-label="Danh sách telemetry trong ngày"
+        aria-label="Danh sách dữ liệu cảm biến trong ngày"
         tabIndex={0}
       >
         <table className="w-full min-w-[30rem] table-fixed caption-bottom text-left text-sm">
