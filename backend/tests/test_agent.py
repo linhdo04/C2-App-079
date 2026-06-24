@@ -27,13 +27,17 @@ from agent.react import (
 from agent.reasoners import (
     FallbackReasoner,
     FallbackRouteDecision,
-    GeminiReasoner,
+    LLMReasoner,
     LLMRoutedFallbackReasoner,
     LLMToolRouter,
     _extract_server_retry_delay,
+    _llm_error_metadata,
+    _parse_fallback_route_decision,
+    _parse_reasoning_decision,
     classify_llm_error,
 )
-from agent.tool_policy import SemanticToolPolicy
+from agent.structured import bind_structured_output
+from agent.tool_policy import SemanticToolPolicy, _parse_tool_policy_decision
 from agent.tools import CalculatorTool, SearchInput, SearchTool, TelemetryInput
 from agent.tools.search import (
     FilteredSearchResult,
@@ -42,6 +46,7 @@ from agent.tools.search import (
     SearchFilterInput,
     SearchResultFilter,
     UsableClaim,
+    _parse_filter_decision,
 )
 from agent.tools.telemetry import (
     TelemetryTemporalIntent,
@@ -899,8 +904,40 @@ def test_react_prompt_limits_thought() -> None:
     assert "one short sentence" in REACT_PROMPT
 
 
+def test_structured_output_uses_json_mode_when_supported() -> None:
+    class FakeStructuredLLM:
+        pass
+
+    class FakeLLM:
+        def __init__(self) -> None:
+            self.schema: Any = None
+            self.method: str | None = None
+
+        def with_structured_output(self, schema: Any, *, method: str) -> Any:
+            self.schema = schema
+            self.method = method
+            return FakeStructuredLLM()
+
+    llm = FakeLLM()
+
+    bound = bind_structured_output(llm, ReasoningDecision)
+
+    assert isinstance(bound, FakeStructuredLLM)
+    assert llm.schema is ReasoningDecision
+    assert llm.method == "json_mode"
+
+
+def test_structured_prompts_require_json_only() -> None:
+    from agent.prompts import REACT_PROMPT, TOOL_POLICY_PROMPT
+
+    assert "Return\nvalid JSON only" in REACT_PROMPT
+    assert "Do not wrap in" in REACT_PROMPT
+    assert "Return valid JSON only" in TOOL_POLICY_PROMPT
+    assert "Do not wrap in" in TOOL_POLICY_PROMPT
+
+
 @pytest.mark.asyncio
-async def test_gemini_reasoner_recovers_valid_json_from_raw_content_list() -> None:
+async def test_llm_reasoner_recovers_valid_json_from_raw_content_list() -> None:
     class FakeBoundLLM:
         async def ainvoke(self, *args: Any, **kwargs: Any) -> Any:
             return SimpleNamespace(
@@ -922,7 +959,7 @@ async def test_gemini_reasoner_recovers_valid_json_from_raw_content_list() -> No
             return FakeBoundLLM()
 
     llm = FakeLLM()
-    reasoner = GeminiReasoner(llm, timeout_seconds=1)
+    reasoner = LLMReasoner(llm, timeout_seconds=1)
 
     decision = await reasoner.decide("Trả lời ngắn", InMemoryMemory(), [])
 
@@ -932,8 +969,89 @@ async def test_gemini_reasoner_recovers_valid_json_from_raw_content_list() -> No
     assert decision.final_answer == "Đã có câu trả lời."
 
 
+def test_structured_parsers_accept_pydantic_dict_and_raw_content() -> None:
+    reasoner_decision = ReasoningDecision(
+        thought="Done.",
+        is_done=True,
+        final_answer="Hoàn tất.",
+    )
+    assert _parse_reasoning_decision(reasoner_decision) == reasoner_decision
+    assert (
+        _parse_reasoning_decision(
+            {
+                "parsed": {
+                    "thought": "Done.",
+                    "action": None,
+                    "is_done": True,
+                    "final_answer": "Hoàn tất.",
+                }
+            }
+        ).final_answer
+        == "Hoàn tất."
+    )
+    assert (
+        _parse_reasoning_decision(
+            SimpleNamespace(
+                content=(
+                    '{"thought":"Done.","action":null,'
+                    '"is_done":true,"final_answer":"Hoàn tất."}'
+                )
+            )
+        ).is_done
+        is True
+    )
+
+    route_decision = FallbackRouteDecision(
+        tool="none",
+        input={},
+        reason="No tool needed.",
+    )
+    assert _parse_fallback_route_decision(route_decision) == route_decision
+    assert (
+        _parse_fallback_route_decision(
+            SimpleNamespace(
+                content='{"tool":"none","input":{},"reason":"No tool needed."}'
+            )
+        ).tool
+        == "none"
+    )
+
+    assert (
+        _parse_tool_policy_decision(
+            SimpleNamespace(content='{"actions":[],"rationale":"No tool needed."}')
+        ).rationale
+        == "No tool needed."
+    )
+    tool_policy_decision = _parse_tool_policy_decision(
+        SimpleNamespace(
+            content=(
+                '{"actions":[{"tool":"telemetry","input":{"query_kinds":'
+                '["temperature_max"],"relative_range":"today"}}]}'
+            )
+        )
+    )
+    assert tool_policy_decision.rationale == (
+        "No rationale provided by policy classifier."
+    )
+    assert tool_policy_decision.actions[0].reason == (
+        "Tool selected by policy classifier."
+    )
+
+    assert (
+        _parse_filter_decision(
+            SimpleNamespace(
+                content=(
+                    '{"coverage":"insufficient","relevant_results":[],'
+                    '"rejected_results":[]}'
+                )
+            )
+        ).coverage
+        == "insufficient"
+    )
+
+
 @pytest.mark.asyncio
-async def test_gemini_reasoner_retries_retryable_llm_errors() -> None:
+async def test_llm_reasoner_retries_retryable_llm_errors() -> None:
     class FakeBoundLLM:
         def __init__(self) -> None:
             self.calls = 0
@@ -957,7 +1075,7 @@ async def test_gemini_reasoner_retries_retryable_llm_errors() -> None:
             return self.bound
 
     llm = FakeLLM()
-    reasoner = GeminiReasoner(
+    reasoner = LLMReasoner(
         llm,
         timeout_seconds=1,
         max_retries=1,
@@ -1319,6 +1437,48 @@ async def test_semantic_tool_policy_accepts_telemetry_specific_query_kinds() -> 
     policy = SemanticToolPolicy(llm, timeout_seconds=1)
 
     decision = await policy.decide(question, InMemoryMemory(), (telemetry_tool,))
+
+    assert decision == Action(
+        tool="telemetry",
+        input={
+            "limit": 50,
+            "query_kinds": ["temperature_max"],
+            "relative_range": "today",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_semantic_tool_policy_accepts_missing_observability_metadata() -> None:
+    async def handler(tool_input: Any, context: Any) -> str:
+        return "unused"
+
+    telemetry_tool = CallableTool(
+        "telemetry",
+        "Read temperature and humidity owned by the user with time filters.",
+        handler,
+        input_model=TelemetryInput,
+    )
+    llm = FakePolicyLLM(
+        {
+            "actions": [
+                {
+                    "tool": "telemetry",
+                    "input": {
+                        "query_kinds": ["temperature_max"],
+                        "relative_range": "today",
+                    },
+                }
+            ],
+        }
+    )
+    policy = SemanticToolPolicy(llm, timeout_seconds=1)
+
+    decision = await policy.decide(
+        "Nhiệt độ cao nhất hôm nay là bao nhiêu?",
+        InMemoryMemory(),
+        (telemetry_tool,),
+    )
 
     assert decision == Action(
         tool="telemetry",
@@ -1766,6 +1926,29 @@ def test_classify_llm_error_message_does_not_leak_details() -> None:
     assert "secret" not in result.message
 
 
+def test_llm_error_metadata_includes_sanitized_bad_request_details() -> None:
+    class BadRequestError(Exception):
+        status_code = 400
+        body = {
+            "error": {
+                "type": "invalid_request_error",
+                "message": (
+                    "Invalid request. api_key=sk-secret-token "
+                    "Structured output not supported."
+                ),
+            }
+        }
+
+    metadata = _llm_error_metadata(BadRequestError())
+
+    assert metadata["status_code"] == 400
+    assert metadata["provider_code"] == "invalid_request_error"
+    assert metadata["provider_message"] == (
+        "Invalid request. api_key=[redacted] Structured output not supported."
+    )
+    assert "sk-secret-token" not in metadata["provider_message"]
+
+
 def test_extract_server_retry_delay_from_human_readable_message() -> None:
     exc = RuntimeError(
         "429 RESOURCE_EXHAUSTED. Please retry in 28.823862733s after the quota resets."
@@ -1773,8 +1956,8 @@ def test_extract_server_retry_delay_from_human_readable_message() -> None:
     assert _extract_server_retry_delay(exc) == pytest.approx(28.823862733)
 
 
-def test_extract_server_retry_delay_from_retry_info_detail() -> None:
-    exc = RuntimeError("{'retryDelay': '53s', '@type': 'google.rpc.RetryInfo'}")
+def test_extract_server_retry_delay_from_structured_detail() -> None:
+    exc = RuntimeError("{'retryDelay': '53s', 'reason': 'provider throttled'}")
     assert _extract_server_retry_delay(exc) == pytest.approx(53.0)
 
 
@@ -1924,9 +2107,9 @@ async def test_ainvoke_llm_with_retry_falls_back_to_backoff_without_server_delay
 
 @pytest.mark.skipif(
     os.getenv("RUN_AGENT_INTEGRATION_TESTS") != "1",
-    reason="Set RUN_AGENT_INTEGRATION_TESTS=1 to call Gemini.",
+    reason="Set RUN_AGENT_INTEGRATION_TESTS=1 to call DeepSeek.",
 )
 @pytest.mark.asyncio
-async def test_gemini_agent_integration_opt_in() -> None:
+async def test_deepseek_agent_integration_opt_in() -> None:
     answer = await run_agent("Trả lời ngắn gọn: 2 + 2 bằng bao nhiêu?")
     assert answer.strip()

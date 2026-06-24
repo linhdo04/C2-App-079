@@ -7,7 +7,7 @@ from .llm import llm
 from .react import Agent, AgentLoop, DoneOrMaxIterations, Executor, ToolRegistry
 from .reasoners import (
     FallbackReasoner,
-    GeminiReasoner,
+    LLMReasoner,
     LLMRoutedFallbackReasoner,
     LLMToolRouter,
 )
@@ -31,7 +31,7 @@ def create_default_agent() -> Agent:
         ]
     )
     reasoner = FallbackReasoner(
-        GeminiReasoner(
+        LLMReasoner(
             llm,
             timeout_seconds=settings.agent_llm_timeout_seconds,
             max_retries=settings.agent_llm_max_retries,

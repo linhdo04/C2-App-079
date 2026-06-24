@@ -9,8 +9,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { useLoginMutation } from "@/lib/api-hooks";
+import { requestProtected } from "@/lib/api-client";
 import { saveSession } from "@/lib/auth-client";
+import { ADMIN_ENTRY_PATH, OPERATOR_ENTRY_PATH } from "@/lib/auth-constants";
 import { useAuthStore } from "@/lib/auth-store";
+import type { ApiResponse } from "@/types/api";
+import type { User } from "@/types/auth";
 import type { AuthFormValues } from "@/lib/validation";
 import { toast } from "sonner";
 
@@ -19,6 +23,8 @@ export function AuthRoute() {
   const queryClient = useQueryClient();
   const authStatus = useAuthStore((state) => state.authStatus);
   const setAuthenticated = useAuthStore((state) => state.setAuthenticated);
+  const setUser = useAuthStore((state) => state.setUser);
+  const clearAuth = useAuthStore((state) => state.clearAuth);
   const isAuthenticated = authStatus === "authenticated";
   const loginMutation = useLoginMutation();
   const isLoading = loginMutation.isPending;
@@ -32,10 +38,15 @@ export function AuthRoute() {
       saveSession(tokenResponse);
       setAuthenticated(true);
       queryClient.removeQueries({ queryKey: ["auth"] });
-      await queryClient.invalidateQueries({ queryKey: ["auth"] });
+      const user = await queryClient.fetchQuery({
+        queryKey: ["auth", "me"],
+        queryFn: () => requestProtected<ApiResponse<User>>("/auth/me").then((response) => response.data),
+      });
+      setUser(user);
       toast.info("Đăng nhập thành công.");
-      router.replace("/dashboard");
+      router.replace(user.role === "admin" ? ADMIN_ENTRY_PATH : OPERATOR_ENTRY_PATH);
     } catch (apiError) {
+      clearAuth();
       toast.error(apiError instanceof Error ? apiError.message : "Không thể xử lý yêu cầu. Vui lòng thử lại.");
     }
   }

@@ -115,11 +115,11 @@ Thought, raw observation và exception nội bộ không được stream ra clie
 Production agent dùng `FallbackReasoner`:
 
 ```text
-GeminiReasoner.decide()
--> nếu Gemini lỗi/timeout: HeuristicReasoner.decide()
+LLMReasoner.decide()
+-> nếu LLM lỗi/timeout: HeuristicReasoner.decide()
 ```
 
-Gemini nhận:
+LLM nhận:
 
 - system prompt và ReAct prompt,
 - user goal,
@@ -127,12 +127,12 @@ Gemini nhận:
 - danh sách tool + schema,
 - các ReAct step trước đó.
 
-Gemini có thể:
+LLM có thể:
 
 - trả `is_done=true` với final answer,
 - hoặc chọn một action với tool name và input JSON.
 
-Nếu primary Gemini reasoner lỗi, fallback router dùng một schema nhỏ để chọn
+Nếu primary LLM reasoner lỗi, fallback router dùng một schema nhỏ để chọn
 tool từ catalog. Nếu router cũng lỗi, lỗi được trả về API/SSE để user biết hệ
 thống AI đang gián đoạn; agent không tự mặc định chạy `search`.
 
@@ -207,12 +207,12 @@ reasoner chọn analysis
 -> reasoner tổng hợp final answer
 ```
 
-Fallback heuristic tự trích xuất crop, area và yield cơ bản từ câu hỏi. Gemini
+Fallback heuristic tự trích xuất crop, area và yield cơ bản từ câu hỏi. LLM
 có thể tạo input chi tiết hơn nếu prompt/context đủ rõ.
 
 ## Case: câu hỏi cần nhiều tool
 
-Gemini có thể gọi nhiều tool qua nhiều iteration, mỗi iteration chỉ chọn đúng
+LLM có thể gọi nhiều tool qua nhiều iteration, mỗi iteration chỉ chọn đúng
 một action.
 
 Ví dụ câu hỏi vừa hỏi môi trường vừa hỏi khuyến nghị kỹ thuật:
@@ -233,7 +233,7 @@ Sau khi bỏ `document_search`, agent không còn local document tool.
 
 ```text
 câu hỏi về "tài liệu nội bộ" hoặc "hướng dẫn nội bộ"
--> Gemini chỉ thấy calculator/search/telemetry/analysis trong tool catalog
+-> LLM chỉ thấy calculator/search/telemetry/analysis trong tool catalog
 -> nếu có thể trả lời bằng context/history thì trả lời
 -> nếu cần nguồn hiện hành bên ngoài thì có thể chọn search
 -> nếu không có dữ liệu phù hợp thì phải nói rõ giới hạn
@@ -294,7 +294,7 @@ sanitize.
 
 ## Case: reasoner lỗi hoặc hết iteration
 
-Nếu Gemini lỗi, `FallbackReasoner` gọi heuristic. Nếu cả reasoner đang dùng vẫn
+Nếu LLM lỗi, `FallbackReasoner` gọi heuristic. Nếu cả reasoner đang dùng vẫn
 lỗi trong loop:
 
 ```text
@@ -315,6 +315,6 @@ termination_reason = max_iterations
 ## Tracing và logging
 
 Mỗi run có `run_id`. Khi Langfuse được cấu hình, agent tạo trace `agent-run` và
-gửi LangChain/Gemini calls qua callback. Tool execution tạo span metadata cấp
+gửi LangChain/DeepSeek calls qua callback. Tool execution tạo span metadata cấp
 cao như `tool`, `iteration`, `attempt`; raw observation không được ghi vào span
 metadata để giảm rủi ro lộ dữ liệu nội bộ.

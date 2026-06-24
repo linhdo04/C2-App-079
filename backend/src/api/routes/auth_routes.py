@@ -29,7 +29,7 @@ from core.security import (
     verify_password,
 )
 from infrastructure.database.postgres import get_session
-from models.user import UserModel
+from models.user import UserModel, UserRole
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -43,6 +43,7 @@ class UserPublic(BaseModel):
     id: int
     name: str
     email: EmailStr
+    role: UserRole
 
 
 class RegisterRequest(BaseModel):

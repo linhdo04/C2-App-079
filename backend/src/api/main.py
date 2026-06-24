@@ -12,10 +12,16 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from core import settings, setup_logging
 from infrastructure import close_db, close_redis, get_redis, init_db, init_redis
 
-from .dependencies import get_current_user
+from .dependencies import require_operator_user
 from .middlewares import error_handling, logging, rate_limiting
 from .responses import ERROR_RESPONSES, DataResponse
-from .routes import agent_router, auth_router, dashboard_router, drone_router
+from .routes import (
+    admin_router,
+    agent_router,
+    auth_router,
+    dashboard_router,
+    drone_router,
+)
 
 
 @asynccontextmanager
@@ -75,12 +81,13 @@ api_router.include_router(auth_router)
 api_router.include_router(drone_router)
 api_router.include_router(
     agent_router,
-    dependencies=[Depends(get_current_user)],
+    dependencies=[Depends(require_operator_user)],
 )
 api_router.include_router(
     dashboard_router,
-    dependencies=[Depends(get_current_user)],
+    dependencies=[Depends(require_operator_user)],
 )
+api_router.include_router(admin_router)
 
 
 class HealthStatus(BaseModel):

@@ -1,13 +1,13 @@
 # Production ReAct Agent
 
-Agent trong `backend/src/agent/` dùng một vòng lặp ReAct duy nhất. LangGraph cũ
-đã bị xóa. Public HTTP response và SSE envelope không thay đổi.
+Agent trong `backend/src/agent/` dùng một vòng lặp ReAct duy nhất. Public HTTP
+response và SSE envelope không thay đổi.
 
 ## Runtime
 
 ```text
 goal + recent chat history
--> Gemini Reasoner
+-> DeepSeek Reasoner
 -> schema-validated Action
 -> Executor
 -> Observation
@@ -21,16 +21,16 @@ retry.
 
 Loop chặn trùng `tool + canonical input` và ghi termination reason:
 `done`, `max_iterations`, `no_progress`, hoặc `reasoner_error`.
-Reasoner yêu cầu Gemini trả JSON qua native response schema và tự validate bằng
+Reasoner yêu cầu LLM trả JSON theo structured-output schema và tự validate bằng
 Pydantic, kèm bước phục hồi parser cho raw provider response bị bọc/lẫn text
-nhưng vẫn chứa JSON hợp lệ. Nếu reasoner chính lỗi, fallback dùng Gemini router
+nhưng vẫn chứa JSON hợp lệ. Nếu reasoner chính lỗi, fallback dùng LLM router
 schema nhỏ để chọn tool; nếu router cũng lỗi thì lỗi được trả về API thay vì
 tự mặc định dùng `search`.
 
 ## Production tools
 
 - `calculator`: AST arithmetic giới hạn.
-- `search`: Tavily, sau đó lọc/tóm tắt kết quả bằng Gemini trước khi đưa vào
+- `search`: Tavily, sau đó lọc/tóm tắt kết quả bằng DeepSeek trước khi đưa vào
   ReAct memory. Nếu filter lỗi hoặc timeout, tool degrade về formatter thô và
   ghi chú lỗi lọc.
 - `telemetry`: dữ liệu mission thuộc authenticated user; hỗ trợ lấy mẫu mới
@@ -55,7 +55,7 @@ answer hoàn chỉnh.
 
 Agent tracing dùng Langfuse khi `LANGFUSE_PUBLIC_KEY` và
 `LANGFUSE_SECRET_KEY` được cấu hình. Mỗi agent run tạo một trace `agent-run`;
-LangChain/Gemini calls được gửi qua Langfuse callback để giữ model, token usage
+LangChain/DeepSeek calls được gửi qua Langfuse callback để giữ model, token usage
 và generation metadata. Chat routes truyền `chat_id` làm `session_id` để nhóm
 multi-turn conversations trong Langfuse Sessions view.
 
@@ -86,6 +86,10 @@ LANGFUSE_PUBLIC_KEY=
 LANGFUSE_SECRET_KEY=
 LANGFUSE_BASE_URL=https://cloud.langfuse.com
 LANGFUSE_TRACING_ENABLED=True
+DEEPSEEK_API_KEY=
+DEEPSEEK_API_BASE=https://api.deepseek.com
+LLM_PROVIDER=deepseek
+DEFAULT_MODEL=deepseek-v4-flash
 AGENT_MAX_ITERATIONS=6
 AGENT_TOOL_MAX_RETRIES=1
 AGENT_TOOL_RETRY_BACKOFF_SECONDS=0.25
@@ -103,6 +107,13 @@ AGENT_GUARDRAILS_REDACT_PII=True
 AGENT_GUARDRAILS_BLOCK_SECRETS=True
 AGENT_GUARDRAILS_BLOCK_PROMPT_INJECTION=True
 ```
+
+`LLM_PROVIDER=deepseek` dùng `langchain-deepseek` và `ChatDeepSeek`. Cost
+Management hiện có bảng giá tự động cho DeepSeek theo model
+`deepseek-v4-flash`, `deepseek-v4-pro`, `deepseek-chat`, và
+`deepseek-reasoner`. Nếu model/provider chưa có trong registry thì Cost
+Management vẫn ghi nhận token nhưng chi phí USD sẽ là `0` cho đến khi bổ sung
+bảng giá tương ứng.
 
 ## Mở rộng
 

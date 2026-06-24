@@ -1,7 +1,7 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { Home, LogOut, Radar } from "lucide-react";
+import { Home, LogOut, Radar, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -67,6 +67,20 @@ export function DashboardHeader() {
             <Home />
           </Link>
         </Button>
+        {user?.role === "admin" && (
+          <Button
+            asChild
+            variant="ghost"
+            size="icon"
+          >
+            <Link
+              href="/admin/cost-management"
+              aria-label="Quản trị chi phí"
+            >
+              <ShieldCheck />
+            </Link>
+          </Button>
+        )}
         <div className="flex min-w-0 items-center gap-2 rounded-xl border border-border/70 bg-card/65 p-1 pl-2">
           <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-secondary text-xs font-bold text-primary">
             {user?.name.trim().charAt(0).toUpperCase() ?? "?"}
