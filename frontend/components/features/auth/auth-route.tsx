@@ -60,25 +60,25 @@ export function AuthRoute() {
           </Button>
 
           <div className="reveal max-w-2xl">
-            <p className="eyebrow text-primary">Operator access</p>
+            <p className="eyebrow text-primary">Quyền truy cập vận hành</p>
             <h1 className="text-balance mt-5 text-4xl font-bold leading-[1.02] tracking-[-0.045em] sm:text-6xl">
               Tiếp tục phiên điều phối thông minh.
             </h1>
             <p className="mt-6 max-w-xl text-base leading-7 text-muted-foreground">
-              Truy cập AI Agent để tổng hợp tín hiệu thời tiết, mùa vụ và thị trường trong một luồng làm việc bảo mật.
+              Truy cập trợ lý AI để tổng hợp tín hiệu thời tiết, mùa vụ và thị trường trong một luồng làm việc bảo mật.
             </p>
             <div className="mt-10 grid gap-3 sm:grid-cols-3">
               <Feature
                 icon={Bot}
-                label="AI insights"
+                label="Nhận định AI"
               />
               <Feature
                 icon={CloudSun}
-                label="Live context"
+                label="Ngữ cảnh trực tiếp"
               />
               <Feature
                 icon={ShieldCheck}
-                label="Secure session"
+                label="Phiên bảo mật"
               />
             </div>
           </div>
@@ -91,7 +91,7 @@ export function AuthRoute() {
         <div className="flex items-center lg:py-12">
           <div className="reveal reveal-delay-1 w-full">
             <div className="mb-6">
-              <p className="eyebrow text-muted-foreground">Welcome back</p>
+              <p className="eyebrow text-muted-foreground">Chào mừng trở lại</p>
               <h2 className="mt-2 text-2xl font-bold tracking-[-0.03em]">Đăng nhập</h2>
             </div>
 

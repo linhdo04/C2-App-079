@@ -45,7 +45,7 @@ export function DashboardLoading() {
     <main
       className="app-shell min-h-screen px-4 text-foreground sm:px-6 lg:px-8"
       aria-busy="true"
-      aria-label="Đang tải dashboard"
+      aria-label="Đang tải bảng điều khiển"
     >
       <div className="mx-auto max-w-[1440px]">
         <DashboardHeader />

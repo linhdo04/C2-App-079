@@ -53,7 +53,7 @@ export function EnvironmentChart({
         <div
           className="h-64 w-full px-2 pb-4 pt-3 sm:px-4 sm:pb-5"
           role="img"
-          aria-label={`Biểu đồ ${title.toLowerCase()} từ dữ liệu telemetry`}
+          aria-label={`Biểu đồ ${title.toLowerCase()} từ dữ liệu cảm biến`}
         >
           <ResponsiveContainer
             width="100%"

@@ -3,7 +3,7 @@ import { AuthRoute } from "@/components/features/auth/auth-route";
 
 export const metadata: Metadata = {
   title: "Đăng nhập | AeroField",
-  description: "Đăng nhập để sử dụng AI Agent của AeroField.",
+  description: "Đăng nhập để sử dụng trợ lý AI của AeroField.",
 };
 
 export default function LoginPage() {
