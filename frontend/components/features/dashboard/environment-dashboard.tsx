@@ -37,8 +37,8 @@ export function EnvironmentDashboard() {
     return (
       <DashboardMessage
         icon={Database}
-        title="Chưa có dữ liệu telemetry"
-        description="Hãy kết nối cảm biến với mission hoặc chạy dữ liệu demo để bắt đầu theo dõi."
+        title="Chưa có dữ liệu cảm biến"
+        description="Hãy kết nối cảm biến với nhiệm vụ hoặc chạy dữ liệu demo để bắt đầu theo dõi."
       />
     );
   }

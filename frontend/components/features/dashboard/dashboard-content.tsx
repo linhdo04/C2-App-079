@@ -40,7 +40,7 @@ export function DashboardContent({ readings, isRefreshing, onRefresh }: Dashboar
         >
           <EnvironmentChart
             title="Nhiệt độ"
-            subtitle="Các mẫu telemetry gần nhất"
+            subtitle="Các mẫu dữ liệu cảm biến gần nhất"
             value={formatMetric(latestTemperature, "°C")}
             change={metricChange(temperatures, "°C")}
             points={temperatures}
@@ -50,7 +50,7 @@ export function DashboardContent({ readings, isRefreshing, onRefresh }: Dashboar
           />
           <EnvironmentChart
             title="Độ ẩm"
-            subtitle="Các mẫu telemetry gần nhất"
+            subtitle="Các mẫu dữ liệu cảm biến gần nhất"
             value={formatMetric(latestHumidity, "%", 0)}
             change={metricChange(humidities, "%", 0)}
             points={humidities}
