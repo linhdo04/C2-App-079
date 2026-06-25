@@ -1,7 +1,7 @@
 """Contract tests for the production ReAct loop."""
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 import pytest
@@ -799,6 +799,125 @@ async def test_tool_started_event_precedes_completion() -> None:
         "tool_started",
         "tool_completed",
     ]
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_stream_uses_langgraph_custom_statuses_and_tokens() -> None:
+    async def search(tool_input: BaseModel, context: ToolContext) -> str:
+        return "safe tool observation"
+
+    reasoner = SequenceReasoner(
+        [
+            ReasoningDecision(
+                thought="Need search",
+                action=Action(tool="search", input={"text": "rice"}),
+            ),
+            ReasoningDecision(
+                thought="Complete",
+                is_done=True,
+                final_answer="safe final answer",
+            ),
+        ]
+    )
+    loop = create_loop(
+        reasoner,
+        [CallableTool("search", "Search", search, input_model=TextInput)],
+    )
+
+    events = [event async for event in loop.stream("goal", session_id="chat-1")]
+
+    statuses = [event for event in events if event["event"] == "status"]
+    assert [status["phase"] for status in statuses] == [
+        "routing",
+        "routing",
+        "tool",
+        "routing",
+        "synthesis",
+    ]
+    assert statuses[2]["tool"] == "search"
+    token_chunks = [event["content"] for event in events if event["event"] == "token"]
+    assert "".join(token_chunks) == "safe final answer"
+    assert max(len(chunk) for chunk in token_chunks) <= 8
+    assert events[-1]["event"] == "result"
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_streams_final_synthesis_tokens_before_result() -> None:
+    async def echo(tool_input: BaseModel, context: ToolContext) -> str:
+        return TextInput.model_validate(tool_input).text
+
+    class StreamingFinalReasoner(SequenceReasoner):
+        def __init__(self) -> None:
+            super().__init__(
+                [
+                    ReasoningDecision(
+                        thought="Use tool",
+                        action=Action(tool="echo", input={"text": "observation"}),
+                    )
+                ]
+            )
+            self.finalize_calls = 0
+
+        async def finalize(self, goal: str, memory: Memory) -> str:
+            self.finalize_calls += 1
+            return "non-stream final"
+
+        async def stream_finalize(
+            self, goal: str, memory: Memory
+        ) -> AsyncIterator[str]:
+            yield "hello "
+            await asyncio.sleep(0)
+            yield "world"
+
+    reasoner = StreamingFinalReasoner()
+    loop = create_loop(
+        reasoner,
+        [CallableTool("echo", "Echo", echo, input_model=TextInput)],
+        max_iterations=1,
+    )
+
+    events = [event async for event in loop.stream("goal")]
+    token_indexes = [
+        index for index, event in enumerate(events) if event["event"] == "token"
+    ]
+    result_index = next(
+        index for index, event in enumerate(events) if event["event"] == "result"
+    )
+
+    assert token_indexes
+    assert max(token_indexes) < result_index
+    assert (
+        "".join(event["content"] for event in events if event["event"] == "token")
+        == "hello world"
+    )
+    assert events[result_index]["result"].final_response == "hello world"
+    assert reasoner.finalize_calls == 0
+
+
+def test_message_stream_token_only_allows_finalize_node() -> None:
+    class Chunk:
+        content = "token"
+
+    assert AgentLoop._message_stream_token((Chunk(), {"langgraph_node": "plan"})) == ""
+    assert (
+        AgentLoop._message_stream_token(
+            (Chunk(), {"langgraph_node": "finalize", "tags": ["nostream"]})
+        )
+        == ""
+    )
+    assert (
+        AgentLoop._message_stream_token((Chunk(), {"langgraph_node": "finalize"}))
+        == "token"
+    )
+
+
+def test_graph_config_uses_chat_thread_id_for_checkpointing() -> None:
+    loop = create_loop(SequenceReasoner([]))
+
+    config = loop._graph_config(run_id="run-1", session_id="42", user_id=7)
+
+    assert config["configurable"]["thread_id"] == "chat:42"
+    assert config["configurable"]["checkpoint_ns"] == "agent-runtime"
 
 
 def test_memory_preserves_recent_order_and_character_limit() -> None:

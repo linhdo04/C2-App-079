@@ -1,0 +1,20 @@
+{
+  "stream_status": {
+    "routing_analyzing": "Đang phân tích yêu cầu...",
+    "routing_planning": "Đang lập kế hoạch xử lý...",
+    "synthesis": "Đang tổng hợp câu trả lời...",
+    "connecting": "Đang kết nối..."
+  },
+  "tool_status": {
+    "default": "Đang chạy {tool}...",
+    "tools": {
+      "calculator": "Đang tính toán...",
+      "telemetry": "Đang phân tích nhiệt độ và độ ẩm...",
+      "search": "Đang tìm kiếm...",
+      "analysis": "Đang phân tích dữ liệu mùa vụ..."
+    }
+  },
+  "fallback_responses": {
+    "finalize_failed": "Tôi chưa thể hoàn tất yêu cầu vào lúc này."
+  }
+}

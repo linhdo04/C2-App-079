@@ -3,10 +3,11 @@
 import asyncio
 from collections.abc import AsyncIterator, Sequence
 from contextlib import suppress
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, cast
 
 from core import settings
 
+from .agent_messages import load_agent_messages
 from .factory import create_default_agent
 from .react import AgentEvent, AgentLoopResult, ConversationMessage, InMemoryMemory
 
@@ -23,12 +24,7 @@ class AgentStreamEvent(TypedDict, total=False):
     content: str
 
 
-TOOL_STATUS_MESSAGES = {
-    "calculator": "Đang tính toán...",
-    "telemetry": "Đang phân tích nhiệt độ và độ ẩm...",
-    "search": "Đang tìm kiếm...",
-    "analysis": "Đang phân tích dữ liệu mùa vụ...",
-}
+AGENT_MESSAGES = load_agent_messages()
 
 
 def _memory(history: Sequence[ConversationMessage] | None) -> InMemoryMemory:
@@ -62,8 +58,31 @@ async def stream_agent(
     session_id: str | None = None,
     history: Sequence[ConversationMessage] | None = None,
 ) -> AsyncIterator[AgentStreamEvent]:
-    queue: asyncio.Queue[AgentStreamEvent | None] = asyncio.Queue()
     memory = _memory(history)
+
+    if hasattr(default_agent, "stream"):
+        async for stream_event in default_agent.stream(
+            question,
+            user_id=user_id,
+            session_id=session_id,
+            memory=memory,
+        ):
+            if stream_event.get("event") == "result":
+                continue
+            if stream_event.get("event") == "status":
+                if stream_event.get("phase") == "tool" and stream_event.get("tool"):
+                    tool = str(stream_event["tool"])
+                    stream_event = {
+                        **stream_event,
+                        "message": AGENT_MESSAGES.tool(tool),
+                    }
+                yield cast(AgentStreamEvent, stream_event)
+            elif stream_event.get("event") == "token":
+                yield cast(AgentStreamEvent, stream_event)
+        return
+
+    # Compatibility path for tests or custom agent doubles that only implement run().
+    queue: asyncio.Queue[AgentStreamEvent | None] = asyncio.Queue()
 
     async def on_event(event: AgentEvent) -> None:
         if event.type != "tool_started" or event.tool is None:
@@ -73,9 +92,7 @@ async def stream_agent(
                 "event": "status",
                 "phase": "tool",
                 "tool": event.tool,
-                "message": TOOL_STATUS_MESSAGES.get(
-                    event.tool, f"Đang chạy {event.tool}..."
-                ),
+                "message": AGENT_MESSAGES.tool(event.tool),
             }
         )
 
@@ -96,13 +113,13 @@ async def stream_agent(
         yield {
             "event": "status",
             "phase": "routing",
-            "message": "Đang phân tích yêu cầu...",
+            "message": AGENT_MESSAGES.status("routing_analyzing"),
         }
         while True:
-            event = await queue.get()
-            if event is None:
+            queued_event = await queue.get()
+            if queued_event is None:
                 break
-            yield event
+            yield queued_event
         result = await task
     finally:
         if not task.done():
@@ -113,7 +130,7 @@ async def stream_agent(
     yield {
         "event": "status",
         "phase": "synthesis",
-        "message": "Đang tổng hợp câu trả lời...",
+        "message": AGENT_MESSAGES.status("synthesis"),
     }
     for start in range(0, len(result.final_response), 32):
         yield {

@@ -1,0 +1,43 @@
+{
+  "external_search_intent_patterns": [
+    "\\b(search|web|internet|google|forecast|news|market|regulation)\\b",
+    "\\b(tìm\\s*kiếm|tra\\s*cứu|trên\\s*mạng|trên\\s*web|internet|google)\\b",
+    "\\b(dự\\s*báo|thời\\s*tiết|hiện\\s*tại|tin\\s*tức|thị\\s*trường)\\b",
+    "\\b(giá\\s*(?:cả|thị\\s*trường)?|quy\\s*định|khuyến\\s*cáo|cảnh\\s*báo|sâu\\s*bệnh)\\b"
+  ],
+  "ambiguous_day_only_patterns": ["\\bngày\\s+(?:[1-9]|[12]\\d|3[01])\\b"],
+  "complete_date_patterns": [
+    "\\bngày\\s+(?:[1-9]|[12]\\d|3[01])\\s*(?:/|-|\\.|tháng)\\b",
+    "\\b(?:[1-9]|[12]\\d|3[01])\\s*(?:/|-|\\.)\\s*(?:[1-9]|1[0-2])\\b"
+  ],
+  "telemetry_no_data_markers": [
+    "Không có dữ liệu nhiệt độ hoặc độ ẩm",
+    "Không có dữ liệu nhiệt độ",
+    "Không có dữ liệu độ ẩm"
+  ],
+  "point_telemetry_query_kinds": ["temperature_at", "humidity_at"],
+  "tool_policy_skip_after_terminal_observation": {
+    "tool": "telemetry",
+    "action_input_key": "query_kinds"
+  },
+  "rules": [
+    {
+      "name": "empty_internal_telemetry_blocks_implicit_search",
+      "conditions": [
+        {"type": "action_tool_is", "tool": "search"},
+        {"type": "memory_has_empty_telemetry_observation"},
+        {"type": "goal_lacks_external_search_intent"}
+      ],
+      "response": "Không có dữ liệu nhiệt độ hoặc độ ẩm của bạn cho khoảng thời gian đã hỏi. Tôi sẽ không dùng kết quả tìm kiếm web để thay thế dữ liệu telemetry nội bộ khi bạn chưa yêu cầu nguồn bên ngoài. Bạn có thể chọn khoảng thời gian khác hoặc kiểm tra thiết bị đã gửi dữ liệu chưa."
+    },
+    {
+      "name": "ambiguous_day_only_telemetry_requires_clarification",
+      "conditions": [
+        {"type": "action_tool_is", "tool": "telemetry"},
+        {"type": "goal_has_ambiguous_day_only_date"},
+        {"type": "action_lacks_point_telemetry_query"}
+      ],
+      "response": "Bạn vui lòng cung cấp đầy đủ ngày, tháng và năm cho khoảng thời gian cần xem telemetry, ví dụ: 18/06/2026. Câu hỏi hiện chỉ nêu “ngày 18” nên tôi không tự suy đoán tháng/năm để tránh lấy sai dữ liệu."
+    }
+  ]
+}
