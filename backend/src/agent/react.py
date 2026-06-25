@@ -3,18 +3,20 @@
 import asyncio
 import inspect
 import json
-import re
 import time
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, NotRequired, Protocol, TypedDict, cast
 
 import structlog
+from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+from .agent_messages import load_agent_messages
+from .decision_guards import load_decision_guard_policy
 from .guardrails import GuardrailPipeline
 from .tracing import (
     AgentTraceContext,
@@ -232,75 +234,17 @@ def _was_action_called(action: Action, memory: Memory) -> bool:
     )
 
 
-_EXTERNAL_SEARCH_INTENT_PATTERN = re.compile(
-    r"\b("
-    r"search|web|internet|google|forecast|news|market|regulation|"
-    r"tìm\s*kiếm|tra\s*cứu|trên\s*mạng|trên\s*web|internet|google|"
-    r"dự\s*báo|thời\s*tiết|hiện\s*tại|tin\s*tức|thị\s*trường|"
-    r"giá\s*(?:cả|thị\s*trường)?|quy\s*định|khuyến\s*cáo|cảnh\s*báo|"
-    r"sâu\s*bệnh"
-    r")\b",
-    re.IGNORECASE,
-)
-_AMBIGUOUS_DAY_ONLY_PATTERN = re.compile(
-    r"\bngày\s+(?:[1-9]|[12]\d|3[01])\b",
-    re.IGNORECASE,
-)
-_COMPLETE_DATE_PATTERN = re.compile(
-    r"("
-    r"\bngày\s+(?:[1-9]|[12]\d|3[01])\s*(?:/|-|\.|tháng)\b|"
-    r"\b(?:[1-9]|[12]\d|3[01])\s*(?:/|-|\.)\s*(?:[1-9]|1[0-2])\b"
-    r")",
-    re.IGNORECASE,
-)
-_TELEMETRY_NO_DATA_MARKERS = (
-    "Không có dữ liệu nhiệt độ hoặc độ ẩm",
-    "Không có dữ liệu nhiệt độ",
-    "Không có dữ liệu độ ẩm",
-)
+_AGENT_MESSAGES = load_agent_messages()
+_DECISION_GUARD_POLICY = load_decision_guard_policy()
 
 
-def _has_explicit_external_search_intent(goal: str) -> bool:
-    return _EXTERNAL_SEARCH_INTENT_PATTERN.search(goal) is not None
-
-
-def _has_empty_telemetry_observation(memory: Memory) -> bool:
-    return any(
-        step.action is not None
-        and step.action.tool == "telemetry"
-        and any(marker in step.observation for marker in _TELEMETRY_NO_DATA_MARKERS)
-        for step in memory.steps()
-    )
-
-
-def _has_ambiguous_day_only_date(goal: str) -> bool:
-    return (
-        _AMBIGUOUS_DAY_ONLY_PATTERN.search(goal) is not None
-        and _COMPLETE_DATE_PATTERN.search(goal) is None
-    )
-
-
-def _should_skip_tool_policy_after_terminal_telemetry(
+def _should_skip_tool_policy_after_terminal_observation(
     goal: str,
     memory: Memory,
 ) -> bool:
-    if _has_explicit_external_search_intent(goal):
-        return False
-    steps = memory.steps()
-    if not steps:
-        return False
-    last_action = steps[-1].action
-    return (
-        last_action is not None
-        and last_action.tool == "telemetry"
-        and "query_kinds" in last_action.input
-    )
-
-
-def _has_point_telemetry_query(action: Action) -> bool:
-    query_kinds = action.input.get("query_kinds")
-    return isinstance(query_kinds, list) and any(
-        query_kind in {"temperature_at", "humidity_at"} for query_kind in query_kinds
+    return _DECISION_GUARD_POLICY.should_skip_tool_policy_after_terminal_observation(
+        goal=goal,
+        memory=memory,
     )
 
 
@@ -309,28 +253,11 @@ def _decision_guard_response(
     action: Action,
     memory: Memory,
 ) -> str | None:
-    if (
-        action.tool == "search"
-        and _has_empty_telemetry_observation(memory)
-        and not _has_explicit_external_search_intent(goal)
-    ):
-        return (
-            "Không có dữ liệu nhiệt độ hoặc độ ẩm của bạn cho khoảng thời gian "
-            "đã hỏi. Tôi sẽ không dùng kết quả tìm kiếm web để thay thế dữ liệu "
-            "telemetry nội bộ khi bạn chưa yêu cầu nguồn bên ngoài. Bạn có thể "
-            "chọn khoảng thời gian khác hoặc kiểm tra thiết bị đã gửi dữ liệu chưa."
-        )
-    if (
-        action.tool == "telemetry"
-        and _has_ambiguous_day_only_date(goal)
-        and not _has_point_telemetry_query(action)
-    ):
-        return (
-            "Bạn vui lòng cung cấp đầy đủ ngày, tháng và năm cho khoảng thời gian "
-            "cần xem telemetry, ví dụ: 18/06/2026. Câu hỏi hiện chỉ nêu “ngày 18” "
-            "nên tôi không tự suy đoán tháng/năm để tránh lấy sai dữ liệu."
-        )
-    return None
+    return _DECISION_GUARD_POLICY.evaluate(
+        goal=goal,
+        action=action,
+        memory=memory,
+    )
 
 
 @dataclass(frozen=True)
@@ -562,6 +489,50 @@ class AgentLoopResult:
     run_id: str = ""
 
 
+class AgentLoopStreamEvent(TypedDict, total=False):
+    event: Literal["status", "token", "result", "debug"]
+    phase: Literal["routing", "tool", "synthesis", "lifecycle"]
+    tool: str
+    message: str
+    content: str
+    result: AgentLoopResult
+    data: dict[str, Any]
+
+
+def _write_stream_event(payload: dict[str, Any]) -> None:
+    try:
+        writer = get_stream_writer()
+    except RuntimeError:
+        return
+    writer(payload)
+
+
+def _write_stream_status(
+    phase: Literal["routing", "tool", "synthesis", "lifecycle"],
+    message: str,
+    *,
+    tool: str | None = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "event": "status",
+        "phase": phase,
+        "message": message,
+    }
+    if tool is not None:
+        payload["tool"] = tool
+    _write_stream_event(payload)
+
+
+def _write_stream_token(content: str) -> None:
+    if content:
+        _write_stream_event({"event": "token", "content": content})
+
+
+def _write_stream_text(content: str, *, chunk_size: int = 8) -> None:
+    for start in range(0, len(content), chunk_size):
+        _write_stream_token(content[start : start + chunk_size])
+
+
 StepCallback = Callable[[int, ReActStep], Awaitable[None] | None]
 CheckpointerFactory = Callable[[], Any | None]
 
@@ -616,6 +587,71 @@ class AgentLoop:
         self.checkpointer_factory = checkpointer_factory
         self.checkpoint_durability = checkpoint_durability
 
+    def _initial_state(
+        self,
+        goal: str,
+        *,
+        user_id: int | None,
+        session_id: str | None,
+        memory: Memory | None,
+        run_id: str,
+    ) -> _AgentGraphState:
+        active_memory = memory or InMemoryMemory()
+        return {
+            "goal": goal,
+            "safe_goal": goal,
+            "user_id": user_id,
+            "session_id": session_id,
+            "run_id": run_id,
+            "conversation": [
+                message.model_dump(mode="json")
+                for message in active_memory.conversation()
+            ],
+            "steps": [step.model_dump(mode="json") for step in active_memory.steps()],
+            "calls": [],
+            "iteration": 0,
+            "final_response": "",
+            "done": False,
+            "termination_reason": "max_iterations",
+            "completed": False,
+        }
+
+    def _graph_config(
+        self,
+        *,
+        run_id: str,
+        session_id: str | None,
+        user_id: int | None,
+    ) -> dict[str, Any]:
+        return {
+            "configurable": {
+                "thread_id": self._thread_id(run_id, session_id),
+                "checkpoint_ns": "agent-runtime",
+            },
+            "metadata": {
+                "agent_run_id": run_id,
+                "agent_session_id": session_id,
+                "agent_user_id": str(user_id) if user_id is not None else None,
+            },
+            "run_name": "agent-langgraph-runtime",
+        }
+
+    def _result_from_state(
+        self,
+        final_state: _AgentGraphState,
+        *,
+        run_id: str,
+    ) -> AgentLoopResult:
+        steps = tuple(ReActStep.model_validate(step) for step in final_state["steps"])
+        return AgentLoopResult(
+            final_response=final_state["final_response"],
+            done=final_state["done"],
+            iterations=final_state["iteration"],
+            steps=steps,
+            termination_reason=final_state["termination_reason"],
+            run_id=run_id,
+        )
+
     async def run(
         self,
         goal: str,
@@ -636,27 +672,13 @@ class AgentLoop:
         started_at = time.perf_counter()
 
         try:
-            active_memory = memory or InMemoryMemory()
-            initial_state: _AgentGraphState = {
-                "goal": goal,
-                "safe_goal": goal,
-                "user_id": user_id,
-                "session_id": session_id,
-                "run_id": run_id,
-                "conversation": [
-                    message.model_dump(mode="json")
-                    for message in active_memory.conversation()
-                ],
-                "steps": [
-                    step.model_dump(mode="json") for step in active_memory.steps()
-                ],
-                "calls": [],
-                "iteration": 0,
-                "final_response": "",
-                "done": False,
-                "termination_reason": "max_iterations",
-                "completed": False,
-            }
+            initial_state = self._initial_state(
+                goal,
+                user_id=user_id,
+                session_id=session_id,
+                memory=memory,
+                run_id=run_id,
+            )
             checkpointer = (
                 self.checkpointer_factory()
                 if self.checkpointer_factory is not None
@@ -667,18 +689,11 @@ class AgentLoop:
                 on_event=on_event,
                 checkpointer=checkpointer,
             )
-            config = {
-                "configurable": {
-                    "thread_id": self._thread_id(run_id, session_id),
-                    "checkpoint_ns": "agent-runtime",
-                },
-                "metadata": {
-                    "agent_run_id": run_id,
-                    "agent_session_id": session_id,
-                    "agent_user_id": str(user_id) if user_id is not None else None,
-                },
-                "run_name": "agent-langgraph-runtime",
-            }
+            config = self._graph_config(
+                run_id=run_id,
+                session_id=session_id,
+                user_id=user_id,
+            )
 
             with agent_run_observation(trace_context, question=goal) as observation:
                 final_state = cast(
@@ -694,17 +709,7 @@ class AgentLoop:
                     ),
                 )
 
-                steps = tuple(
-                    ReActStep.model_validate(step) for step in final_state["steps"]
-                )
-                result = AgentLoopResult(
-                    final_response=final_state["final_response"],
-                    done=final_state["done"],
-                    iterations=final_state["iteration"],
-                    steps=steps,
-                    termination_reason=final_state["termination_reason"],
-                    run_id=run_id,
-                )
+                result = self._result_from_state(final_state, run_id=run_id)
                 duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
                 if observation is not None:
                     observation.update(
@@ -742,6 +747,210 @@ class AgentLoop:
         finally:
             reset_trace_context(trace_token)
 
+    async def stream(
+        self,
+        goal: str,
+        *,
+        user_id: int | None = None,
+        session_id: str | None = None,
+        memory: Memory | None = None,
+        on_step: StepCallback | None = None,
+        on_event: EventCallback | None = None,
+    ) -> AsyncIterator[AgentLoopStreamEvent]:
+        run_id = str(uuid.uuid4())
+        trace_context = AgentTraceContext(
+            run_id=run_id,
+            user_id=user_id,
+            session_id=session_id,
+        )
+        trace_token = set_trace_context(trace_context)
+        started_at = time.perf_counter()
+        streamed_parts: list[str] = []
+        final_state: _AgentGraphState | None = None
+
+        try:
+            initial_state = self._initial_state(
+                goal,
+                user_id=user_id,
+                session_id=session_id,
+                memory=memory,
+                run_id=run_id,
+            )
+            checkpointer = (
+                self.checkpointer_factory()
+                if self.checkpointer_factory is not None
+                else None
+            )
+            graph = self._compile_graph(
+                on_step=on_step,
+                on_event=on_event,
+                checkpointer=checkpointer,
+            )
+            config = self._graph_config(
+                run_id=run_id,
+                session_id=session_id,
+                user_id=user_id,
+            )
+            with agent_run_observation(trace_context, question=goal) as observation:
+                async for chunk in graph.astream(
+                    initial_state,
+                    config=config,
+                    stream_mode=["custom", "updates", "values"],
+                    durability=(
+                        self.checkpoint_durability if checkpointer is not None else None
+                    ),
+                    version="v2",
+                ):
+                    mode = chunk.get("type") if isinstance(chunk, dict) else None
+                    data = chunk.get("data") if isinstance(chunk, dict) else None
+                    if mode == "custom" and isinstance(data, dict):
+                        if data.get("event") == "status":
+                            yield cast(AgentLoopStreamEvent, data)
+                        elif data.get("event") == "token":
+                            token = str(data.get("content", ""))
+                            if token:
+                                streamed_parts.append(token)
+                                yield {"event": "token", "content": token}
+                    elif mode == "messages":
+                        token = self._message_stream_token(data)
+                        if token:
+                            streamed_parts.append(token)
+                            yield {"event": "token", "content": token}
+                    elif mode == "values" and isinstance(data, dict):
+                        final_state = cast(_AgentGraphState, data)
+
+                if final_state is None:
+                    raise RuntimeError("LangGraph stream completed without final state")
+
+                result = self._result_from_state(final_state, run_id=run_id)
+                if not streamed_parts:
+                    for start in range(0, len(result.final_response), 32):
+                        yield {
+                            "event": "token",
+                            "content": result.final_response[start : start + 32],
+                        }
+                duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+                if observation is not None:
+                    observation.update(
+                        output={"response": result.final_response},
+                        metadata={
+                            "iterations": result.iterations,
+                            "termination_reason": result.termination_reason,
+                            "success": result.done,
+                            "duration_ms": duration_ms,
+                            "runtime": "langgraph",
+                            "checkpointed": checkpointer is not None,
+                            "streamed": True,
+                        },
+                    )
+                logger.info(
+                    "agent_stream_summary",
+                    run_id=run_id,
+                    success=result.done,
+                    duration_ms=duration_ms,
+                    iterations=result.iterations,
+                    termination_reason=result.termination_reason,
+                    runtime="langgraph",
+                    checkpointed=checkpointer is not None,
+                )
+                await _emit(
+                    on_event,
+                    AgentEvent(
+                        "completed",
+                        run_id,
+                        result.iterations,
+                        duration_ms=duration_ms,
+                        termination_reason=result.termination_reason,
+                    ),
+                )
+                yield {"event": "result", "result": result}
+        finally:
+            reset_trace_context(trace_token)
+
+    @staticmethod
+    def _message_stream_token(data: Any) -> str:
+        if not isinstance(data, tuple) or len(data) != 2:
+            return ""
+        message, metadata = data
+        if not isinstance(metadata, dict):
+            return ""
+        if metadata.get("langgraph_node") != "finalize":
+            return ""
+        tags = metadata.get("tags") or []
+        if "nostream" in tags:
+            return ""
+        content = getattr(message, "content", "")
+        return content if isinstance(content, str) else ""
+
+    async def stream_debug_events(
+        self,
+        goal: str,
+        *,
+        user_id: int | None = None,
+        session_id: str | None = None,
+        memory: Memory | None = None,
+    ) -> AsyncIterator[AgentLoopStreamEvent]:
+        run_id = str(uuid.uuid4())
+        trace_context = AgentTraceContext(
+            run_id=run_id, user_id=user_id, session_id=session_id
+        )
+        trace_token = set_trace_context(trace_context)
+        try:
+            checkpointer = (
+                self.checkpointer_factory()
+                if self.checkpointer_factory is not None
+                else None
+            )
+            graph = self._compile_graph(
+                on_step=None, on_event=None, checkpointer=checkpointer
+            )
+            events = await graph.astream_events(
+                self._initial_state(
+                    goal,
+                    user_id=user_id,
+                    session_id=session_id,
+                    memory=memory,
+                    run_id=run_id,
+                ),
+                config=self._graph_config(
+                    run_id=run_id, session_id=session_id, user_id=user_id
+                ),
+                version="v3",
+            )
+            async for event in events:
+                projection = self._project_debug_event(event)
+                if projection:
+                    yield {"event": "debug", "data": projection}
+        finally:
+            reset_trace_context(trace_token)
+
+    @staticmethod
+    def _project_debug_event(event: dict[str, Any]) -> dict[str, Any] | None:
+        name = event.get("name")
+        event_type = event.get("event")
+        raw_metadata = event.get("metadata")
+        metadata: dict[str, Any] = (
+            raw_metadata if isinstance(raw_metadata, dict) else {}
+        )
+        allowed = {
+            "on_chain_start",
+            "on_chain_end",
+            "on_chain_error",
+            "on_chat_model_stream",
+            "on_tool_start",
+            "on_tool_end",
+            "on_tool_error",
+        }
+        if event_type not in allowed:
+            return None
+        return {
+            "event": event_type,
+            "name": name,
+            "node": metadata.get("langgraph_node"),
+            "run_id": event.get("run_id"),
+            "tags": event.get("tags", []),
+        }
+
     def _compile_graph(
         self,
         *,
@@ -774,6 +983,7 @@ class AgentLoop:
         return graph.compile(checkpointer=checkpointer)
 
     async def _input_guardrail_node(self, state: _AgentGraphState) -> dict[str, Any]:
+        _write_stream_status("routing", _AGENT_MESSAGES.status("routing_analyzing"))
         checked_goal = (
             self.guardrails.check_input(state["goal"])
             if self.guardrails is not None
@@ -794,13 +1004,14 @@ class AgentLoop:
                 "completed": True,
             }
         return {
-            "safe_goal": checked_goal.content
-            if checked_goal is not None
-            else state["goal"]
+            "safe_goal": (
+                checked_goal.content if checked_goal is not None else state["goal"]
+            )
         }
 
     def _plan_node(self, on_step: StepCallback | None) -> Any:
         async def node(state: _AgentGraphState) -> dict[str, Any]:
+            _write_stream_status("routing", _AGENT_MESSAGES.status("routing_planning"))
             iteration = state["iteration"] + 1
             memory = self._memory_from_state(state)
             tools = self.executor.registry.list()
@@ -808,7 +1019,7 @@ class AgentLoop:
                 policy_action = (
                     await self.tool_policy.decide(state["safe_goal"], memory, tools)
                     if self.tool_policy is not None
-                    and not _should_skip_tool_policy_after_terminal_telemetry(
+                    and not _should_skip_tool_policy_after_terminal_observation(
                         state["safe_goal"],
                         memory,
                     )
@@ -920,6 +1131,9 @@ class AgentLoop:
             if raw_action is None:
                 return {"completed": True, "termination_reason": "reasoner_error"}
             action = Action.model_validate(raw_action)
+            _write_stream_status(
+                "tool", _AGENT_MESSAGES.tool(action.tool), tool=action.tool
+            )
             execution = await self.executor.execute(
                 action,
                 ToolContext(
@@ -949,16 +1163,37 @@ class AgentLoop:
         return node
 
     async def _finalize_node(self, state: _AgentGraphState) -> dict[str, Any]:
+        _write_stream_status("synthesis", _AGENT_MESSAGES.status("synthesis"))
         final_response = state["final_response"]
+        streamed_in_finalize = False
         reason = state["termination_reason"]
         done = state["done"]
         if not final_response:
-            try:
-                final_response = await self.reasoner.finalize(
-                    state["safe_goal"], self._memory_from_state(state)
-                )
-            except Exception:
-                final_response = "Tôi chưa thể hoàn tất yêu cầu vào lúc này."
+            memory = self._memory_from_state(state)
+            stream_finalize = getattr(self.reasoner, "stream_finalize", None)
+            if callable(stream_finalize):
+                chunks: list[str] = []
+                try:
+                    async for chunk in stream_finalize(state["safe_goal"], memory):
+                        text = str(chunk)
+                        if not text:
+                            continue
+                        chunks.append(text)
+                        _write_stream_token(text)
+                        streamed_in_finalize = True
+                    final_response = "".join(chunks)
+                except Exception:
+                    if chunks:
+                        final_response = "".join(chunks)
+                    else:
+                        final_response = _AGENT_MESSAGES.fallback("finalize_failed")
+            else:
+                try:
+                    final_response = await self.reasoner.finalize(
+                        state["safe_goal"], memory
+                    )
+                except Exception:
+                    final_response = _AGENT_MESSAGES.fallback("finalize_failed")
         if self.guardrails is not None:
             output_decision = self.guardrails.check_output(final_response)
             if output_decision.blocked:
@@ -973,6 +1208,8 @@ class AgentLoop:
                 done = False
             else:
                 final_response = output_decision.content
+        if final_response and not streamed_in_finalize:
+            _write_stream_text(final_response, chunk_size=1)
         return {
             "final_response": final_response,
             "termination_reason": reason,
@@ -1044,6 +1281,42 @@ class Agent:
             on_event=on_event,
         )
 
+    async def stream(
+        self,
+        goal: str,
+        *,
+        user_id: int | None = None,
+        session_id: str | None = None,
+        memory: Memory | None = None,
+        on_step: StepCallback | None = None,
+        on_event: EventCallback | None = None,
+    ) -> AsyncIterator[AgentLoopStreamEvent]:
+        async for event in self.loop.stream(
+            goal,
+            user_id=user_id,
+            session_id=session_id,
+            memory=memory,
+            on_step=on_step,
+            on_event=on_event,
+        ):
+            yield event
+
+    async def stream_debug_events(
+        self,
+        goal: str,
+        *,
+        user_id: int | None = None,
+        session_id: str | None = None,
+        memory: Memory | None = None,
+    ) -> AsyncIterator[AgentLoopStreamEvent]:
+        async for event in self.loop.stream_debug_events(
+            goal,
+            user_id=user_id,
+            session_id=session_id,
+            memory=memory,
+        ):
+            yield event
+
 
 __all__ = [
     "Action",
@@ -1051,6 +1324,7 @@ __all__ = [
     "AgentEvent",
     "AgentLoop",
     "AgentLoopResult",
+    "AgentLoopStreamEvent",
     "CallableTool",
     "ConversationMessage",
     "DoneOrMaxIterations",

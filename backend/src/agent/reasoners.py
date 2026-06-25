@@ -3,7 +3,7 @@
 import asyncio
 import json
 import re
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -92,6 +92,67 @@ async def _ainvoke_llm_with_retry(
                 "agent_llm_call_failed",
                 operation=operation,
                 attempt=attempt,
+                will_retry=should_retry,
+                sleep_seconds=sleep_seconds if should_retry else None,
+                error_type=type(exc).__name__,
+                **_llm_error_metadata(exc, server_delay=server_delay),
+            )
+            if not should_retry:
+                raise
+            await asyncio.sleep(sleep_seconds)
+
+
+def _chunk_content(chunk: Any) -> str:
+    content = getattr(chunk, "content", chunk)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+        return "".join(parts)
+    return ""
+
+
+async def _astream_llm_with_retry(
+    stream: Callable[[], AsyncIterator[Any]],
+    *,
+    operation: str,
+    timeout_seconds: float,
+    max_retries: int,
+    backoff_seconds: float,
+) -> AsyncIterator[Any]:
+    allowed_attempts = max_retries + 1
+    for attempt in range(1, allowed_attempts + 1):
+        yielded = False
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                async for chunk in stream():
+                    yielded = True
+                    await record_llm_usage(chunk, operation=operation)
+                    yield chunk
+            return
+        except Exception as exc:
+            retryable = _is_retryable_llm_error(exc)
+            should_retry = retryable and not yielded and attempt < allowed_attempts
+            server_delay = _extract_server_retry_delay(exc)
+            if should_retry:
+                if server_delay is not None:
+                    sleep_seconds: float = min(
+                        server_delay,
+                        timeout_seconds,
+                        _MAX_SERVER_RETRY_DELAY_SECONDS,
+                    )
+                else:
+                    sleep_seconds = backoff_seconds * (2 ** (attempt - 1))
+            logger.warning(
+                "agent_llm_stream_failed",
+                operation=operation,
+                attempt=attempt,
+                yielded=yielded,
                 will_retry=should_retry,
                 sleep_seconds=sleep_seconds if should_retry else None,
                 error_type=type(exc).__name__,
@@ -365,19 +426,7 @@ class LLMReasoner:
         return _parse_reasoning_decision(response)
 
     async def finalize(self, goal: str, memory: Memory) -> str:
-        history = "\n".join(step.model_dump_json() for step in memory.steps())
-        messages = [
-            SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(
-                content=(
-                    f"User goal:\n{goal}\n\n"
-                    f"ReAct steps:\n{history}\n\n"
-                    "The iteration limit was reached. Provide the safest "
-                    "useful final answer from available observations and "
-                    "state any limitation."
-                )
-            ),
-        ]
+        messages = self._finalize_messages(goal, memory)
         span_metadata = {
             "operation": "finalize",
             "timeout_seconds": self._timeout_seconds,
@@ -415,6 +464,69 @@ class LLMReasoner:
                 raise
         self._log_usage(response)
         return str(getattr(response, "content", response))
+
+    def _finalize_messages(self, goal: str, memory: Memory) -> list[Any]:
+        history = "\n".join(step.model_dump_json() for step in memory.steps())
+        return [
+            SystemMessage(content=SYSTEM_PROMPT),
+            HumanMessage(
+                content=(
+                    f"User goal:\n{goal}\n\n"
+                    f"ReAct steps:\n{history}\n\n"
+                    "The iteration limit was reached. Provide the safest "
+                    "useful final answer from available observations and "
+                    "state any limitation."
+                )
+            ),
+        ]
+
+    async def stream_finalize(self, goal: str, memory: Memory) -> AsyncIterator[str]:
+        astream = getattr(self._llm, "astream", None)
+        if not callable(astream):
+            final_response = await self.finalize(goal, memory)
+            for start in range(0, len(final_response), 32):
+                yield final_response[start : start + 32]
+            return
+
+        messages = self._finalize_messages(goal, memory)
+        span_metadata = {
+            "operation": "finalize-stream",
+            "timeout_seconds": self._timeout_seconds,
+        }
+        with agent_span("agent-reasoner", metadata=span_metadata) as span:
+            try:
+                async for chunk in _astream_llm_with_retry(
+                    lambda: astream(
+                        messages,
+                        config=langchain_config(
+                            "reasoner-finalize-stream",
+                            extra_metadata=span_metadata,
+                        ),
+                    ),
+                    operation="reasoner-finalize-stream",
+                    timeout_seconds=self._timeout_seconds,
+                    max_retries=self._max_retries,
+                    backoff_seconds=self._backoff_seconds,
+                ):
+                    text = _chunk_content(chunk)
+                    if text:
+                        yield text
+            except Exception as exc:
+                update_observation(
+                    span,
+                    operation="agent-reasoner",
+                    metadata={
+                        **span_metadata,
+                        "error_type": type(exc).__name__,
+                        "timed_out": isinstance(exc, TimeoutError),
+                        **_llm_error_metadata(exc),
+                    },
+                    level="ERROR",
+                    status_message=(
+                        f"Reasoner finalize stream failed with {type(exc).__name__}."
+                    ),
+                )
+                raise
 
     @staticmethod
     def _log_usage(response: Any, *, run_id: str = "") -> None:
@@ -787,6 +899,43 @@ class FallbackReasoner:
                 error_type=type(exc).__name__,
             )
             return await self._fallback.finalize(goal, memory)
+
+    async def stream_finalize(self, goal: str, memory: Memory) -> AsyncIterator[str]:
+        primary_stream = getattr(self._primary, "stream_finalize", None)
+        if callable(primary_stream):
+            try:
+                async for chunk in primary_stream(goal, memory):
+                    yield chunk
+                return
+            except Exception as exc:
+                logger.warning(
+                    "agent_provider_fallback",
+                    operation="stream_finalize",
+                    provider="llm",
+                    error_type=type(exc).__name__,
+                )
+        else:
+            try:
+                response = await self._primary.finalize(goal, memory)
+                for start in range(0, len(response), 32):
+                    yield response[start : start + 32]
+                return
+            except Exception as exc:
+                logger.warning(
+                    "agent_provider_fallback",
+                    operation="stream_finalize",
+                    provider="llm",
+                    error_type=type(exc).__name__,
+                )
+
+        fallback_stream = getattr(self._fallback, "stream_finalize", None)
+        if callable(fallback_stream):
+            async for chunk in fallback_stream(goal, memory):
+                yield chunk
+            return
+        response = await self._fallback.finalize(goal, memory)
+        for start in range(0, len(response), 32):
+            yield response[start : start + 32]
 
 
 __all__ = [

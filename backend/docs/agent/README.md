@@ -71,9 +71,19 @@ multi-turn conversations trong Langfuse Sessions view.
 Tool execution được bọc bằng span metadata cấp cao (`tool`, `iteration`,
 `attempt`) nhưng không ghi raw tool observation để giảm rủi ro lộ dữ liệu nội bộ.
 
-## Guardrails
+## Decision guards và guardrails
 
-Agent áp dụng guardrail deterministic theo các lớp trước/sau agent và quanh
+Decision guards trước khi chạy tool được cấu hình bằng
+`backend/src/agent/decision_guard_rules.json` và được evaluate bởi
+`DecisionGuardPolicy`. Các rule này xử lý những trường hợp điều phối có rủi ro
+như không thay thế telemetry nội bộ bằng web search khi user chưa yêu cầu nguồn
+bên ngoài, hoặc yêu cầu bổ sung ngày/tháng/năm khi query telemetry còn mơ hồ.
+Graph runtime chỉ gọi policy evaluator, không nhúng trực tiếp regex, tool name
+hay response text vào node logic. Các message/status user-facing của agent được
+cấu hình ở `backend/src/agent/agent_messages.json` và được lookup qua
+`AgentMessages`.
+
+Agent cũng áp dụng guardrail deterministic theo các lớp trước/sau agent và quanh
 tool execution:
 
 - Input guardrail chặn prompt-injection rõ ràng và secret/API key trước khi gọi
