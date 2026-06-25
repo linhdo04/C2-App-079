@@ -87,6 +87,19 @@ def create_loop(
 
 
 @pytest.mark.asyncio
+async def test_tool_adapts_to_langchain_structured_tool() -> None:
+    async def echo(tool_input: BaseModel, context: ToolContext) -> str:
+        data = TextInput.model_validate(tool_input)
+        return f"{context.run_id}:{data.text}"
+
+    tool = CallableTool("echo", "Echo input", echo, input_model=TextInput)
+    langchain_tool = tool.as_langchain_tool(ToolContext(goal="goal", run_id="run-1"))
+
+    assert langchain_tool.name == "echo"
+    assert await langchain_tool.ainvoke({"text": "hello"}) == "run-1:hello"
+
+
+@pytest.mark.asyncio
 async def test_done_and_max_iterations_termination() -> None:
     done = SequenceReasoner(
         [ReasoningDecision(thought="Complete", is_done=True, final_answer="answer")]

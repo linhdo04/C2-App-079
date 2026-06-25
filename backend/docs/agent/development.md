@@ -13,6 +13,7 @@ DeepSeek phải opt-in bằng `RUN_AGENT_INTEGRATION_TESTS=1`.
 
 Các contract bắt buộc cần test khi thay đổi agent:
 
+- LangGraph state transitions và checkpoint lifecycle.
 - Pydantic tool input validation.
 - retry/backoff chỉ cho transient error.
 - `done`, `max_iterations`, `no_progress`, `reasoner_error`.

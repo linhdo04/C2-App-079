@@ -1,17 +1,20 @@
-# Production ReAct Agent
+# Production LangGraph Agent
 
-Agent trong `backend/src/agent/` dùng một vòng lặp ReAct duy nhất. Public HTTP
-response và SSE envelope không thay đổi.
+Agent trong `backend/src/agent/` dùng custom LangGraph `StateGraph` cho runtime
+AI. Public HTTP response và SSE envelope không thay đổi.
 
 ## Runtime
 
 ```text
 goal + recent chat history
--> DeepSeek Reasoner
--> schema-validated Action
--> Executor
--> Observation
--> repeat or final answer
+-> input guardrail
+-> LangGraph StateGraph:
+   -> tool policy / DeepSeek reasoner
+   -> schema-validated Action
+   -> executor
+   -> Observation
+   -> repeat, finalize, or final answer
+-> output guardrail
 ```
 
 `Action.input` là JSON object. Mỗi tool khai báo Pydantic `input_model`;
@@ -19,7 +22,7 @@ goal + recent chat history
 tool idempotent/retryable. Tool-not-found, validation và permanent errors không
 retry.
 
-Loop chặn trùng `tool + canonical input` và ghi termination reason:
+Graph chặn trùng `tool + canonical input` và ghi termination reason:
 `done`, `max_iterations`, `no_progress`, hoặc `reasoner_error`.
 Reasoner yêu cầu LLM trả JSON theo structured-output schema và tự validate bằng
 Pydantic, kèm bước phục hồi parser cho raw provider response bị bọc/lẫn text
@@ -50,6 +53,12 @@ thứ tự thời gian và giới hạn tổng ký tự bằng
 diễn ra, sau đó phát final answer theo nhiều token event. Thought, observation
 và exception nội bộ không đi ra client. Chat chỉ được persist sau khi final
 answer hoàn chỉnh.
+
+LangGraph checkpointing dùng `langgraph-checkpoint-postgres` khi
+`AGENT_CHECKPOINTING_ENABLED=True`. `thread_id` là `chat:{chat_id}` cho chat và
+`run:{run_id}` cho `/agent/ask`; ChatHistory vẫn là source of truth cho UI.
+Checkpoint tables thuộc official LangGraph saver và được setup tự động khi
+`LANGGRAPH_CHECKPOINT_SETUP_ON_START=True`.
 
 ## Tracing
 
@@ -106,6 +115,9 @@ AGENT_GUARDRAILS_ENABLED=True
 AGENT_GUARDRAILS_REDACT_PII=True
 AGENT_GUARDRAILS_BLOCK_SECRETS=True
 AGENT_GUARDRAILS_BLOCK_PROMPT_INJECTION=True
+AGENT_CHECKPOINTING_ENABLED=True
+AGENT_CHECKPOINT_DURABILITY=sync
+LANGGRAPH_CHECKPOINT_SETUP_ON_START=True
 ```
 
 `LLM_PROVIDER=deepseek` dùng `langchain-deepseek` và `ChatDeepSeek`. Cost
@@ -118,8 +130,10 @@ bảng giá tương ứng.
 ## Mở rộng
 
 Tool mới implement `Tool`, khai báo `input_model`, `idempotent`, `retryable`,
-rồi đăng ký tại `factory.py`. Provider mới implement `Reasoner.decide()` và
-`Reasoner.finalize()`; không cần sửa loop.
+rồi đăng ký tại `factory.py`. `Tool.as_langchain_tool()` cung cấp adapter
+LangChain `StructuredTool` khi cần interop. Provider mới implement
+`Reasoner.decide()` và `Reasoner.finalize()`; không cần sửa graph topology trừ
+khi đổi workflow.
 
 Xem thêm [kiến trúc](architecture.md), [luồng chạy](runtime-flows.md),
 [tools](tools.md), [phát triển](development.md), và
