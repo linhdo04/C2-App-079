@@ -12,8 +12,12 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    gemini_api_key: str = Field(alias="GEMINI_API_KEY")
-    default_model: str = Field(alias="DEFAULT_MODEL", default="gemini-2.5-flash")
+    deepseek_api_key: str = Field(alias="DEEPSEEK_API_KEY", default="")
+    deepseek_api_base: str = Field(
+        alias="DEEPSEEK_API_BASE", default="https://api.deepseek.com"
+    )
+    llm_provider: str = Field(alias="LLM_PROVIDER", default="deepseek")
+    default_model: str = Field(alias="DEFAULT_MODEL", default="deepseek-v4-flash")
     tavily_api_key: str = Field(alias="TAVILY_API_KEY")
     langfuse_public_key: str | None = Field(alias="LANGFUSE_PUBLIC_KEY", default=None)
     langfuse_secret_key: str | None = Field(alias="LANGFUSE_SECRET_KEY", default=None)
@@ -21,7 +25,6 @@ class Settings(BaseSettings):
     langfuse_tracing_enabled: bool = Field(
         alias="LANGFUSE_TRACING_ENABLED", default=True
     )
-
     agent_tool_timeout_seconds: float = Field(
         alias="AGENT_TOOL_TIMEOUT_SECONDS", default=15.0, gt=0
     )
@@ -63,6 +66,15 @@ class Settings(BaseSettings):
     )
     agent_guardrails_block_prompt_injection: bool = Field(
         alias="AGENT_GUARDRAILS_BLOCK_PROMPT_INJECTION", default=True
+    )
+    agent_checkpointing_enabled: bool = Field(
+        alias="AGENT_CHECKPOINTING_ENABLED", default=True
+    )
+    agent_checkpoint_durability: Literal["sync", "async", "exit"] = Field(
+        alias="AGENT_CHECKPOINT_DURABILITY", default="sync"
+    )
+    langgraph_checkpoint_setup_on_start: bool = Field(
+        alias="LANGGRAPH_CHECKPOINT_SETUP_ON_START", default=True
     )
 
     app_name: str = Field(alias="APP_NAME", default="Autonomous Drones")

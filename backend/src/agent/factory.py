@@ -2,12 +2,13 @@
 
 from core import settings
 
+from .checkpointing import get_agent_checkpointer
 from .guardrails import build_default_guardrails
 from .llm import llm
 from .react import Agent, AgentLoop, DoneOrMaxIterations, Executor, ToolRegistry
 from .reasoners import (
     FallbackReasoner,
-    GeminiReasoner,
+    LLMReasoner,
     LLMRoutedFallbackReasoner,
     LLMToolRouter,
 )
@@ -31,7 +32,7 @@ def create_default_agent() -> Agent:
         ]
     )
     reasoner = FallbackReasoner(
-        GeminiReasoner(
+        LLMReasoner(
             llm,
             timeout_seconds=settings.agent_llm_timeout_seconds,
             max_retries=settings.agent_llm_max_retries,
@@ -65,6 +66,8 @@ def create_default_agent() -> Agent:
                 max_retries=settings.agent_llm_max_retries,
                 backoff_seconds=settings.agent_llm_retry_backoff_seconds,
             ),
+            checkpointer_factory=get_agent_checkpointer,
+            checkpoint_durability=settings.agent_checkpoint_durability,
         )
     )
 

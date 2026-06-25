@@ -15,7 +15,7 @@ from core.security import (
 )
 from infrastructure.cache.redis import get_redis
 from infrastructure.database.postgres import get_session
-from models.user import UserModel
+from models.user import UserModel, UserRole
 
 oauth2_scheme = OAuth2PasswordBearer(
     tokenUrl=f"{settings.api_prefix}/auth/token",
@@ -82,3 +82,25 @@ async def get_current_user(
         raise auth_error()
 
     return user
+
+
+async def require_admin_user(
+    current_user: Annotated[UserModel, Depends(get_current_user)],
+) -> UserModel:
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required",
+        )
+    return current_user
+
+
+async def require_operator_user(
+    current_user: Annotated[UserModel, Depends(get_current_user)],
+) -> UserModel:
+    if current_user.role != UserRole.OPERATOR:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Operator access required",
+        )
+    return current_user

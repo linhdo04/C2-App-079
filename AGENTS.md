@@ -88,7 +88,8 @@ Current ADRs include:
 - FastAPI
 - SQLModel + PostgreSQL
 - Redis rate limiting
-- LangChain/Gemini integration
+- LangChain/DeepSeek integration
+- LangGraph agent runtime
 
 Do not replace established architectural patterns unless explicitly instructed.
 

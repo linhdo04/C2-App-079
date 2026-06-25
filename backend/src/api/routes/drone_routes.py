@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.dependencies import get_current_user
+from api.dependencies import require_operator_user
 from api.responses import DataResponse
 from core.security import hash_secret, verify_secret
 from infrastructure.database.postgres import get_session
@@ -77,7 +77,7 @@ def _verify_node_api_key(node: IoTNodeModel, api_key: str) -> None:
 )
 async def create_drone_api_key(
     iot_node_id: int,
-    current_user: Annotated[UserModel, Depends(get_current_user)],
+    current_user: Annotated[UserModel, Depends(require_operator_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> DataResponse[DroneApiKeyPublic]:
     if current_user.id is None:

@@ -1,17 +1,20 @@
-# Production ReAct Agent
+# Production LangGraph Agent
 
-Agent trong `backend/src/agent/` dùng một vòng lặp ReAct duy nhất. LangGraph cũ
-đã bị xóa. Public HTTP response và SSE envelope không thay đổi.
+Agent trong `backend/src/agent/` dùng custom LangGraph `StateGraph` cho runtime
+AI. Public HTTP response và SSE envelope không thay đổi.
 
 ## Runtime
 
 ```text
 goal + recent chat history
--> Gemini Reasoner
--> schema-validated Action
--> Executor
--> Observation
--> repeat or final answer
+-> input guardrail
+-> LangGraph StateGraph:
+   -> tool policy / DeepSeek reasoner
+   -> schema-validated Action
+   -> executor
+   -> Observation
+   -> repeat, finalize, or final answer
+-> output guardrail
 ```
 
 `Action.input` là JSON object. Mỗi tool khai báo Pydantic `input_model`;
@@ -19,18 +22,18 @@ goal + recent chat history
 tool idempotent/retryable. Tool-not-found, validation và permanent errors không
 retry.
 
-Loop chặn trùng `tool + canonical input` và ghi termination reason:
+Graph chặn trùng `tool + canonical input` và ghi termination reason:
 `done`, `max_iterations`, `no_progress`, hoặc `reasoner_error`.
-Reasoner yêu cầu Gemini trả JSON qua native response schema và tự validate bằng
+Reasoner yêu cầu LLM trả JSON theo structured-output schema và tự validate bằng
 Pydantic, kèm bước phục hồi parser cho raw provider response bị bọc/lẫn text
-nhưng vẫn chứa JSON hợp lệ. Nếu reasoner chính lỗi, fallback dùng Gemini router
+nhưng vẫn chứa JSON hợp lệ. Nếu reasoner chính lỗi, fallback dùng LLM router
 schema nhỏ để chọn tool; nếu router cũng lỗi thì lỗi được trả về API thay vì
 tự mặc định dùng `search`.
 
 ## Production tools
 
 - `calculator`: AST arithmetic giới hạn.
-- `search`: Tavily, sau đó lọc/tóm tắt kết quả bằng Gemini trước khi đưa vào
+- `search`: Tavily, sau đó lọc/tóm tắt kết quả bằng DeepSeek trước khi đưa vào
   ReAct memory. Nếu filter lỗi hoặc timeout, tool degrade về formatter thô và
   ghi chú lỗi lọc.
 - `telemetry`: dữ liệu mission thuộc authenticated user; hỗ trợ lấy mẫu mới
@@ -51,20 +54,36 @@ diễn ra, sau đó phát final answer theo nhiều token event. Thought, observ
 và exception nội bộ không đi ra client. Chat chỉ được persist sau khi final
 answer hoàn chỉnh.
 
+LangGraph checkpointing dùng `langgraph-checkpoint-postgres` khi
+`AGENT_CHECKPOINTING_ENABLED=True`. `thread_id` là `chat:{chat_id}` cho chat và
+`run:{run_id}` cho `/agent/ask`; ChatHistory vẫn là source of truth cho UI.
+Checkpoint tables thuộc official LangGraph saver và được setup tự động khi
+`LANGGRAPH_CHECKPOINT_SETUP_ON_START=True`.
+
 ## Tracing
 
 Agent tracing dùng Langfuse khi `LANGFUSE_PUBLIC_KEY` và
 `LANGFUSE_SECRET_KEY` được cấu hình. Mỗi agent run tạo một trace `agent-run`;
-LangChain/Gemini calls được gửi qua Langfuse callback để giữ model, token usage
+LangChain/DeepSeek calls được gửi qua Langfuse callback để giữ model, token usage
 và generation metadata. Chat routes truyền `chat_id` làm `session_id` để nhóm
 multi-turn conversations trong Langfuse Sessions view.
 
 Tool execution được bọc bằng span metadata cấp cao (`tool`, `iteration`,
 `attempt`) nhưng không ghi raw tool observation để giảm rủi ro lộ dữ liệu nội bộ.
 
-## Guardrails
+## Decision guards và guardrails
 
-Agent áp dụng guardrail deterministic theo các lớp trước/sau agent và quanh
+Decision guards trước khi chạy tool được cấu hình bằng
+`backend/src/agent/decision_guard_rules.json` và được evaluate bởi
+`DecisionGuardPolicy`. Các rule này xử lý những trường hợp điều phối có rủi ro
+như không thay thế telemetry nội bộ bằng web search khi user chưa yêu cầu nguồn
+bên ngoài, hoặc yêu cầu bổ sung ngày/tháng/năm khi query telemetry còn mơ hồ.
+Graph runtime chỉ gọi policy evaluator, không nhúng trực tiếp regex, tool name
+hay response text vào node logic. Các message/status user-facing của agent được
+cấu hình ở `backend/src/agent/agent_messages.json` và được lookup qua
+`AgentMessages`.
+
+Agent cũng áp dụng guardrail deterministic theo các lớp trước/sau agent và quanh
 tool execution:
 
 - Input guardrail chặn prompt-injection rõ ràng và secret/API key trước khi gọi
@@ -86,6 +105,10 @@ LANGFUSE_PUBLIC_KEY=
 LANGFUSE_SECRET_KEY=
 LANGFUSE_BASE_URL=https://cloud.langfuse.com
 LANGFUSE_TRACING_ENABLED=True
+DEEPSEEK_API_KEY=
+DEEPSEEK_API_BASE=https://api.deepseek.com
+LLM_PROVIDER=deepseek
+DEFAULT_MODEL=deepseek-v4-flash
 AGENT_MAX_ITERATIONS=6
 AGENT_TOOL_MAX_RETRIES=1
 AGENT_TOOL_RETRY_BACKOFF_SECONDS=0.25
@@ -102,13 +125,25 @@ AGENT_GUARDRAILS_ENABLED=True
 AGENT_GUARDRAILS_REDACT_PII=True
 AGENT_GUARDRAILS_BLOCK_SECRETS=True
 AGENT_GUARDRAILS_BLOCK_PROMPT_INJECTION=True
+AGENT_CHECKPOINTING_ENABLED=True
+AGENT_CHECKPOINT_DURABILITY=sync
+LANGGRAPH_CHECKPOINT_SETUP_ON_START=True
 ```
+
+`LLM_PROVIDER=deepseek` dùng `langchain-deepseek` và `ChatDeepSeek`. Cost
+Management hiện có bảng giá tự động cho DeepSeek theo model
+`deepseek-v4-flash`, `deepseek-v4-pro`, `deepseek-chat`, và
+`deepseek-reasoner`. Nếu model/provider chưa có trong registry thì Cost
+Management vẫn ghi nhận token nhưng chi phí USD sẽ là `0` cho đến khi bổ sung
+bảng giá tương ứng.
 
 ## Mở rộng
 
 Tool mới implement `Tool`, khai báo `input_model`, `idempotent`, `retryable`,
-rồi đăng ký tại `factory.py`. Provider mới implement `Reasoner.decide()` và
-`Reasoner.finalize()`; không cần sửa loop.
+rồi đăng ký tại `factory.py`. `Tool.as_langchain_tool()` cung cấp adapter
+LangChain `StructuredTool` khi cần interop. Provider mới implement
+`Reasoner.decide()` và `Reasoner.finalize()`; không cần sửa graph topology trừ
+khi đổi workflow.
 
 Xem thêm [kiến trúc](architecture.md), [luồng chạy](runtime-flows.md),
 [tools](tools.md), [phát triển](development.md), và

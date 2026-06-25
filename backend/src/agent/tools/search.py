@@ -11,6 +11,7 @@ from core import settings
 
 from ..react import Tool, ToolContext
 from ..reasoners import _ainvoke_llm_with_retry
+from ..structured import bind_structured_output
 from ..tracing import langchain_config
 
 
@@ -50,7 +51,7 @@ class SearchFilterDecision(BaseModel):
 
 
 class SearchResultFilter:
-    """Gemini-backed filter that only summarizes retrieved Tavily results."""
+    """LLM-backed filter that only summarizes retrieved Tavily results."""
 
     def __init__(
         self,
@@ -60,10 +61,7 @@ class SearchResultFilter:
         max_retries: int = 0,
         backoff_seconds: float = 0.5,
     ) -> None:
-        self._structured_llm = cast(Any, llm).bind(
-            response_mime_type="application/json",
-            response_schema=SearchFilterDecision.model_json_schema(),
-        )
+        self._structured_llm = bind_structured_output(llm, SearchFilterDecision)
         self._timeout_seconds = timeout_seconds
         self._max_retries = max_retries
         self._backoff_seconds = backoff_seconds
@@ -78,7 +76,9 @@ class SearchResultFilter:
                     "the user. Do not invent URLs, titles, sources, numbers, or "
                     "facts. Put short source-grounded claims in usable_claims, each "
                     "with the exact source_url from the same result. Reject results "
-                    "that do not help answer the question."
+                    "that do not help answer the question. Return valid JSON "
+                    "only. Do not wrap in markdown. Match the "
+                    "SearchFilterDecision schema exactly."
                 ),
             },
             {

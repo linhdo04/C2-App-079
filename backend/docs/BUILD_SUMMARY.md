@@ -4,7 +4,9 @@
 
 ## Tổng quan
 
-Đã hoàn thành build AI Agent cho hệ thống C2-App-079 với đầy đủ chức năng và documentation.
+Đã hoàn thành build AI Agent cho hệ thống C2-App-079. Tài liệu này đã được cập
+nhật để phản ánh runtime hiện tại: ReAct loop riêng của project, LangChain và
+DeepSeek.
 
 ## Công việc đã hoàn thành
 
@@ -12,11 +14,11 @@
 
 #### Core Agent (`src/agent/`)
 
-- ✅ `agent.py`: Main agent với `run_agent()` function
-- ✅ `graph.py`: LangGraph StateGraph workflow
-- ✅ `nodes.py`: Agent nodes (wrappers cho tools)
-- ✅ `state.py`: AgentState với BaseMessage typing
-- ✅ `prompts.py`: System prompt cho nông nghiệp VN
+- ✅ `agent.py`: Public entry point với `run_agent()` và streaming helpers
+- ✅ `react.py`: Provider-neutral ReAct loop
+- ✅ `reasoners.py`: DeepSeek-backed reasoner/router
+- ✅ `executor.py`: Tool execution, validation, timeout và retry
+- ✅ `prompts.py`: Structured JSON prompts cho nông nghiệp VN
 - ✅ `__init__.py`: Exports đầy đủ
 
 #### Tools (`src/agent/tools/`)
@@ -76,12 +78,14 @@ Output: "Chưa có dữ liệu mùa vụ trong schema này."
 
 ### Architecture Highlights
 
-**LangGraph Workflow**:
+**ReAct Workflow**:
 
 ```
-User Question → Database Node → END
-             ↓
-          (Optional: Search, Weather, Analysis nodes)
+User Question → DeepSeek Reasoner → Tool Action → Observation
+                         ↑                              ↓
+                         +---------- repeat ------------+
+                         ↓
+                    Final Answer
 ```
 
 **Tools**:
@@ -91,20 +95,21 @@ User Question → Database Node → END
 3. `get_weather_forecast`: Open-Meteo API async
 4. `analyze_crop_data`: NEW - Data analysis & recommendations
 
-**LLM**: Google Gemini 2.0 Flash
+**LLM**: DeepSeek via `langchain-deepseek`
 
-**State Management**: LangChain BaseMessage with add_messages reducer
+**State Management**: In-process ReAct memory with schema-validated actions and
+observations
 
 ### Code Structure
 
 ```
 src/agent/
 ├── __init__.py           # Exports
-├── agent.py              # Main agent (49 lines)
-├── graph.py              # LangGraph workflow (33 lines)
-├── nodes.py              # Node wrappers (46 lines)
-├── state.py              # State definition (13 lines)
-├── prompts.py            # System prompt (15 lines)
+├── agent.py              # Public run/stream helpers
+├── react.py              # ReAct loop
+├── reasoners.py          # LLM reasoner/router
+├── executor.py           # Tool validation/execution
+├── prompts.py            # Structured prompts
 └── tools/
     ├── __init__.py       # Tool exports (9 lines)
     ├── analysis.py       # NEW Analysis tool (41 lines)
@@ -118,7 +123,7 @@ src/agent/
 1. **Async Support**: All tools support async/await
 2. **Type Safety**: Full mypy strict mode compliance
 3. **Error Handling**: Multi-layer error handling
-4. **Extensible**: Easy to add new tools/nodes
+4. **Extensible**: Easy to add new tools
 5. **Documented**: Comprehensive docs at all levels
 
 ## Files Modified
@@ -127,11 +132,11 @@ src/agent/
 
 1. `/src/agent/__init__.py` - Exports
 2. `/src/agent/agent.py` - Agent logic với proper types
-3. `/src/agent/graph.py` - LangGraph với StateGraph[AgentState]
-4. `/src/agent/nodes.py` - Nodes với BaseMessage
-5. `/src/agent/state.py` - State với BaseMessage typing
+3. `/src/agent/react.py` - ReAct loop
+4. `/src/agent/reasoners.py` - Reasoner/router
+5. `/src/agent/executor.py` - Tool validation/execution
 6. `/src/agent/tools/__init__.py` - Tool exports
-7. `/src/agent/tools/analysis.py` - NEW analysis tool
+7. `/src/agent/tools/analysis.py` - Analysis tool
 8. `/test_agent.py` - Test script
 
 ### Documentation
@@ -167,7 +172,10 @@ src/agent/
 ### Environment Variables
 
 ```bash
-GEMINI_API_KEY=your_gemini_api_key
+DEEPSEEK_API_KEY=your_deepseek_api_key
+DEEPSEEK_API_BASE=https://api.deepseek.com
+LLM_PROVIDER=deepseek
+DEFAULT_MODEL=deepseek-v4-flash
 TAVILY_API_KEY=your_tavily_api_key
 DATABASE_URL=postgresql+asyncpg://...
 ```
@@ -176,8 +184,7 @@ DATABASE_URL=postgresql+asyncpg://...
 
 ```toml
 langchain>=1.3.4
-langgraph>=1.2.4
-langchain_google_genai>=4.2.4
+langchain-deepseek>=1.1.0
 tavily_python>=0.7.25
 ```
 
@@ -233,13 +240,12 @@ print(answer)
 - API Docs: `docs/api/agent.md`
 - Agent Docs: `docs/agent/README.md`
 - Architecture: `docs/agent/architecture.md`
-- ADR: `docs/adr/0004-langchain-gemini.md`
+- ADR: `docs/adr/0005-switch-agent-llm-to-deepseek.md`
 
 ### External
 
 - LangChain: https://python.langchain.com/
-- LangGraph: https://langchain-ai.github.io/langgraph/
-- Google Gemini: https://ai.google.dev/
+- DeepSeek API docs: https://api-docs.deepseek.com/
 
 ## Notes
 

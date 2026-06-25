@@ -25,6 +25,7 @@ export function AgentChatWidget() {
   const widgetRef = useRef<HTMLDivElement>(null);
   const tokenBufferRef = useRef("");
   const animationFrameRef = useRef<number | null>(null);
+  const pumpTokenBufferRef = useRef<() => void>(() => undefined);
   const searchParamsString = searchParams.toString();
   const rawChatId = searchParams.get("chat");
   const parsedChatId = rawChatId === null ? null : Number(rawChatId);
@@ -113,34 +114,55 @@ export function AgentChatWidget() {
     return () => window.removeEventListener("keydown", handleEscape);
   }, [isHistoryOpen, isOpen]);
 
+  const stopTokenAnimation = useCallback(() => {
+    if (animationFrameRef.current !== null) {
+      window.clearTimeout(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+  }, []);
+
   const flushTokenBuffer = useCallback(() => {
-    animationFrameRef.current = null;
+    stopTokenAnimation();
     if (tokenBufferRef.current.length === 0) {
       return;
     }
     const bufferedTokens = tokenBufferRef.current;
     tokenBufferRef.current = "";
     setStreamingAnswer((answer) => answer + bufferedTokens);
+  }, [stopTokenAnimation]);
+
+  const pumpTokenBuffer = useCallback(() => {
+    const bufferedTokens = tokenBufferRef.current;
+    if (bufferedTokens.length === 0) {
+      animationFrameRef.current = null;
+      return;
+    }
+
+    const nextChunkLength = bufferedTokens.length > 120 ? 6 : bufferedTokens.length > 48 ? 4 : 2;
+    const nextChunk = bufferedTokens.slice(0, nextChunkLength);
+    tokenBufferRef.current = bufferedTokens.slice(nextChunkLength);
+    setStreamingAnswer((answer) => answer + nextChunk);
+    animationFrameRef.current = window.setTimeout(
+      () => pumpTokenBufferRef.current(),
+      tokenBufferRef.current.length > 80 ? 12 : 24,
+    );
   }, []);
+
+  useEffect(() => {
+    pumpTokenBufferRef.current = pumpTokenBuffer;
+  }, [pumpTokenBuffer]);
 
   const queueToken = useCallback(
     (token: string) => {
       tokenBufferRef.current += token;
       if (animationFrameRef.current === null) {
-        animationFrameRef.current = window.requestAnimationFrame(flushTokenBuffer);
+        animationFrameRef.current = window.setTimeout(pumpTokenBuffer, 12);
       }
     },
-    [flushTokenBuffer],
+    [pumpTokenBuffer],
   );
 
-  useEffect(
-    () => () => {
-      if (animationFrameRef.current !== null) {
-        window.cancelAnimationFrame(animationFrameRef.current);
-      }
-    },
-    [],
-  );
+  useEffect(() => stopTokenAnimation, [stopTokenAnimation]);
 
   const displayMessages = useMemo(() => {
     const pendingMessages: ChatMessage[] = [];
@@ -168,7 +190,7 @@ export function AgentChatWidget() {
     tokenBufferRef.current = "";
 
     try {
-      let currentChatId = chatId;
+      let currentChatId = activeChatId;
       let completedResponse: ChatMessageResponse | null = null;
       let streamError = "";
 
@@ -233,10 +255,7 @@ export function AgentChatWidget() {
       setStreamingStatus("");
       setIsStreaming(false);
       tokenBufferRef.current = "";
-      if (animationFrameRef.current !== null) {
-        window.cancelAnimationFrame(animationFrameRef.current);
-        animationFrameRef.current = null;
-      }
+      stopTokenAnimation();
     }
   }
 

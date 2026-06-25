@@ -7,9 +7,11 @@ from sqlalchemy import CheckConstraint
 from models import (
     ChatHistoryModel,
     ChatSessionModel,
+    CostBudgetModel,
     CoverageResultModel,
     FlightPathModel,
     IoTNodeModel,
+    LLMUsageEventModel,
     MissionModel,
     ReportModel,
     TelemetryModel,
@@ -37,6 +39,13 @@ from models import (
         (TelemetryModel, {"iot_node_id": 1, "humidity_percent": -0.01}),
         (TelemetryModel, {"iot_node_id": 1, "humidity_percent": 100.01}),
         (CoverageResultModel, {"coverage_percent": 101}),
+        (UserModel, {"name": "User", "email": "u@example.com", "role": "invalid"}),
+        (
+            LLMUsageEventModel,
+            {"operation": "op", "model_name": "m", "input_tokens": -1},
+        ),
+        (CostBudgetModel, {"monthly_budget_usd": -1}),
+        (CostBudgetModel, {"alert_threshold_percent": 101}),
     ],
 )
 def test_models_reject_invalid_domain_values(
@@ -85,6 +94,17 @@ def test_model_constraints_are_declared() -> None:
             "ck_telemetry_humidity_percent",
         },
         CoverageResultModel: {"ck_coverage_results_percent"},
+        UserModel: {"ck_users_role"},
+        LLMUsageEventModel: {
+            "ck_llm_usage_input_tokens",
+            "ck_llm_usage_output_tokens",
+            "ck_llm_usage_total_tokens",
+            "ck_llm_usage_cost_usd",
+        },
+        CostBudgetModel: {
+            "ck_cost_budgets_monthly",
+            "ck_cost_budgets_alert_threshold",
+        },
     }
 
     for model, expected in expected_constraints.items():
@@ -128,6 +148,14 @@ def test_foreign_keys_and_time_series_queries_are_indexed() -> None:
             "ix_coverage_results_flight_path_id",
         },
         ReportModel: {"ix_reports_mission_id", "ix_reports_author_id"},
+        LLMUsageEventModel: {
+            "ix_llm_usage_events_user_id",
+            "ix_llm_usage_events_chat_session_id",
+            "ix_llm_usage_occurred_at",
+            "ix_llm_usage_user_occurred_at",
+            "ix_llm_usage_run_id",
+            "ix_llm_usage_active_occurred_at",
+        },
     }
 
     for model, expected in expected_indexes.items():

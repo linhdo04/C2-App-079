@@ -3,13 +3,12 @@
 import { publicRouters } from "@/consts/public-routers";
 import { PublicRouter } from "@/enums/public-routers";
 import { useCurrentUserQuery } from "@/lib/api-hooks";
+import { ADMIN_ENTRY_PATH, OPERATOR_ENTRY_PATH, isAdminPath } from "@/lib/auth-constants";
 import { useAuthStore } from "@/lib/auth-store";
 import { useQueryClient } from "@tanstack/react-query";
 import { usePathname, useRouter } from "next/navigation";
 import { ReactNode, useEffect } from "react";
 import Loading from "./loading";
-
-const AUTHENTICATED_ENTRY_PATH = "/dashboard";
 
 export default function CheckAuth({ children }: { children: ReactNode }) {
   const { setAuthenticated, setUser, clearAuth } = useAuthStore();
@@ -35,11 +34,24 @@ export default function CheckAuth({ children }: { children: ReactNode }) {
       return;
     }
 
-    setUser(currentUserQuery.data);
+    const user = currentUserQuery.data;
+    const entryPath = user.role === "admin" ? ADMIN_ENTRY_PATH : OPERATOR_ENTRY_PATH;
+
+    setUser(user);
     setAuthenticated(true);
 
-    if (publicRouters.includes(pathname) && pathname !== PublicRouter.Home) {
-      router.replace(AUTHENTICATED_ENTRY_PATH);
+    if (user.role === "admin" && !isAdminPath(pathname)) {
+      router.replace(entryPath);
+      return;
+    }
+
+    if (user.role !== "admin" && isAdminPath(pathname)) {
+      router.replace(entryPath);
+      return;
+    }
+
+    if (publicRouters.includes(pathname)) {
+      router.replace(entryPath);
     }
   }, [currentUserQuery.data, isCheckingAuth, pathname, router, setAuthenticated, setUser]);
 

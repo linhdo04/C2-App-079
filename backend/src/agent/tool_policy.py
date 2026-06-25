@@ -2,29 +2,51 @@
 
 import json
 from collections.abc import Sequence
-from typing import Any, cast
+from typing import Any
 
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .prompts import TOOL_POLICY_PROMPT
 from .react import Action, Memory, Tool, _was_action_called
 from .reasoners import _ainvoke_llm_with_retry
+from .structured import bind_structured_output
 from .tracing import agent_span, langchain_config, update_observation
 
 logger = structlog.get_logger(__name__)
+
+DEFAULT_TOOL_POLICY_REASON = "Tool selected by policy classifier."
+DEFAULT_TOOL_POLICY_RATIONALE = "No rationale provided by policy classifier."
 
 
 class ToolPolicyCall(BaseModel):
     tool: str
     input: dict[str, Any] = Field(default_factory=dict)
-    reason: str = Field(min_length=1)
+    reason: str = Field(default=DEFAULT_TOOL_POLICY_REASON, min_length=1)
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def default_blank_reason(cls, value: Any) -> Any:
+        if value is None:
+            return DEFAULT_TOOL_POLICY_REASON
+        if isinstance(value, str) and not value.strip():
+            return DEFAULT_TOOL_POLICY_REASON
+        return value
 
 
 class ToolPolicyDecision(BaseModel):
     actions: list[ToolPolicyCall] = Field(default_factory=list, max_length=4)
-    rationale: str = Field(min_length=1)
+    rationale: str = Field(default=DEFAULT_TOOL_POLICY_RATIONALE, min_length=1)
+
+    @field_validator("rationale", mode="before")
+    @classmethod
+    def default_blank_rationale(cls, value: Any) -> Any:
+        if value is None:
+            return DEFAULT_TOOL_POLICY_RATIONALE
+        if isinstance(value, str) and not value.strip():
+            return DEFAULT_TOOL_POLICY_RATIONALE
+        return value
 
 
 class SemanticToolPolicy:
@@ -38,10 +60,7 @@ class SemanticToolPolicy:
         max_retries: int = 0,
         backoff_seconds: float = 0.5,
     ) -> None:
-        self._structured_llm = cast(Any, llm).bind(
-            response_mime_type="application/json",
-            response_schema=ToolPolicyDecision.model_json_schema(),
-        )
+        self._structured_llm = bind_structured_output(llm, ToolPolicyDecision)
         self._timeout_seconds = timeout_seconds
         self._max_retries = max_retries
         self._backoff_seconds = backoff_seconds

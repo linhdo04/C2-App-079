@@ -10,7 +10,7 @@ from infrastructure.database.postgres import close_db, db_session, init_db
 from models.iot_node import IoTNodeModel
 from models.mission import MissionModel, MissionStatus
 from models.telemetry import TelemetryModel
-from models.user import UserModel
+from models.user import UserModel, UserRole
 
 DEMO_EMAIL = "demo@aerofield.example.com"
 DEMO_PASSWORD = "Demo12345!"
@@ -57,11 +57,13 @@ async def _get_or_create_user(session: AsyncSession) -> UserModel:
             name="AeroField Demo",
             email=DEMO_EMAIL,
             password_hash=hash_password(DEMO_PASSWORD),
+            role=UserRole.ADMIN,
         )
         session.add(user)
     else:
         user.name = "AeroField Demo"
         user.password_hash = hash_password(DEMO_PASSWORD)
+        user.role = UserRole.ADMIN
         user.deleted_at = None
     await session.flush()
     return user

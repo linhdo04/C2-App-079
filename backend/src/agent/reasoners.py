@@ -3,9 +3,9 @@
 import asyncio
 import json
 import re
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 import structlog
@@ -14,7 +14,9 @@ from pydantic import BaseModel, Field
 
 from .prompts import REACT_PROMPT, SYSTEM_PROMPT
 from .react import Action, Memory, Reasoner, ReasoningDecision, Tool, _was_action_called
+from .structured import bind_structured_output
 from .tracing import agent_span, langchain_config, update_observation
+from .usage import record_llm_usage
 
 logger = structlog.get_logger(__name__)
 
@@ -26,9 +28,9 @@ LLM_RETRYABLE_CODE_NAMES = {
     "INTERNAL",
 }
 
-# Gemini embeds the suggested retry delay in two places inside the 429 body:
+# Some providers embed the suggested retry delay in two places inside the 429 body:
 #   "Please retry in 28.823862733s"       (human-readable message, float seconds)
-#   'retryDelay': '28s'  or  "retryDelay": "28s"  (structured RetryInfo detail)
+#   'retryDelay': '28s'  or  "retryDelay": "28s"  (structured detail)
 _RETRY_DELAY_PATTERNS = (
     re.compile(r"retry in (\d+(?:\.\d+)?)s", re.IGNORECASE),
     re.compile(r"""['"]retryDelay['"]\s*:\s*['"](\d+(?:\.\d+)?)s['"]"""),
@@ -70,7 +72,9 @@ async def _ainvoke_llm_with_retry(
     allowed_attempts = max_retries + 1
     for attempt in range(1, allowed_attempts + 1):
         try:
-            return await asyncio.wait_for(invoke(), timeout=timeout_seconds)
+            response = await asyncio.wait_for(invoke(), timeout=timeout_seconds)
+            await record_llm_usage(response, operation=operation)
+            return response
         except Exception as exc:
             retryable = _is_retryable_llm_error(exc)
             should_retry = retryable and attempt < allowed_attempts
@@ -88,6 +92,67 @@ async def _ainvoke_llm_with_retry(
                 "agent_llm_call_failed",
                 operation=operation,
                 attempt=attempt,
+                will_retry=should_retry,
+                sleep_seconds=sleep_seconds if should_retry else None,
+                error_type=type(exc).__name__,
+                **_llm_error_metadata(exc, server_delay=server_delay),
+            )
+            if not should_retry:
+                raise
+            await asyncio.sleep(sleep_seconds)
+
+
+def _chunk_content(chunk: Any) -> str:
+    content = getattr(chunk, "content", chunk)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+        return "".join(parts)
+    return ""
+
+
+async def _astream_llm_with_retry(
+    stream: Callable[[], AsyncIterator[Any]],
+    *,
+    operation: str,
+    timeout_seconds: float,
+    max_retries: int,
+    backoff_seconds: float,
+) -> AsyncIterator[Any]:
+    allowed_attempts = max_retries + 1
+    for attempt in range(1, allowed_attempts + 1):
+        yielded = False
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                async for chunk in stream():
+                    yielded = True
+                    await record_llm_usage(chunk, operation=operation)
+                    yield chunk
+            return
+        except Exception as exc:
+            retryable = _is_retryable_llm_error(exc)
+            should_retry = retryable and not yielded and attempt < allowed_attempts
+            server_delay = _extract_server_retry_delay(exc)
+            if should_retry:
+                if server_delay is not None:
+                    sleep_seconds: float = min(
+                        server_delay,
+                        timeout_seconds,
+                        _MAX_SERVER_RETRY_DELAY_SECONDS,
+                    )
+                else:
+                    sleep_seconds = backoff_seconds * (2 ** (attempt - 1))
+            logger.warning(
+                "agent_llm_stream_failed",
+                operation=operation,
+                attempt=attempt,
+                yielded=yielded,
                 will_retry=should_retry,
                 sleep_seconds=sleep_seconds if should_retry else None,
                 error_type=type(exc).__name__,
@@ -123,6 +188,9 @@ def _llm_error_metadata(
     code = _llm_error_code(exc)
     if code is not None:
         metadata["provider_code"] = code
+    message = _llm_provider_message(exc)
+    if message is not None:
+        metadata["provider_message"] = message
     # Use pre-computed value when available to avoid running the regex twice.
     delay = (
         server_delay if server_delay is not None else _extract_server_retry_delay(exc)
@@ -155,6 +223,14 @@ def _parse_status_code(value: Any) -> int | None:
 
 def _llm_error_code(exc: Exception) -> str | None:
     code = getattr(exc, "code", None)
+    if code is None:
+        body = getattr(exc, "body", None)
+        if isinstance(body, dict):
+            error = body.get("error")
+            if isinstance(error, dict):
+                code = error.get("code") or error.get("type")
+            else:
+                code = body.get("code") or body.get("type")
     if callable(code):
         try:
             code = code()
@@ -166,6 +242,30 @@ def _llm_error_code(exc: Exception) -> str | None:
     if isinstance(name, str):
         return name
     return str(code).rsplit(".", maxsplit=1)[-1]
+
+
+def _llm_provider_message(exc: Exception) -> str | None:
+    message = getattr(exc, "message", None)
+    if message is None:
+        body = getattr(exc, "body", None)
+        if isinstance(body, dict):
+            error = body.get("error")
+            if isinstance(error, dict):
+                message = error.get("message")
+            else:
+                message = body.get("message")
+    if not isinstance(message, str) or not message.strip():
+        return None
+    return _sanitize_provider_message(message)
+
+
+def _sanitize_provider_message(message: str, *, max_length: int = 240) -> str:
+    sanitized = re.sub(r"sk-[A-Za-z0-9_-]+", "[redacted]", message)
+    sanitized = re.sub(r"(?i)(api[_ -]?key\s*[:=]\s*)\S+", r"\1[redacted]", sanitized)
+    sanitized = re.sub(r"\s+", " ", sanitized).strip()
+    if len(sanitized) > max_length:
+        return sanitized[: max_length - 3].rstrip() + "..."
+    return sanitized
 
 
 @dataclass(frozen=True)
@@ -238,8 +338,8 @@ def classify_llm_error(exc: Exception) -> LLMErrorClassification:
     )
 
 
-class GeminiReasoner:
-    """Gemini-backed reasoner using a provider-neutral interface."""
+class LLMReasoner:
+    """LLM-backed reasoner using a provider-neutral interface."""
 
     def __init__(
         self,
@@ -250,10 +350,7 @@ class GeminiReasoner:
         backoff_seconds: float = 0.5,
     ) -> None:
         self._llm = llm
-        self._structured_llm = cast(Any, llm).bind(
-            response_mime_type="application/json",
-            response_schema=ReasoningDecision.model_json_schema(),
-        )
+        self._structured_llm = bind_structured_output(llm, ReasoningDecision)
         self._timeout_seconds = timeout_seconds
         self._max_retries = max_retries
         self._backoff_seconds = backoff_seconds
@@ -329,19 +426,7 @@ class GeminiReasoner:
         return _parse_reasoning_decision(response)
 
     async def finalize(self, goal: str, memory: Memory) -> str:
-        history = "\n".join(step.model_dump_json() for step in memory.steps())
-        messages = [
-            SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(
-                content=(
-                    f"User goal:\n{goal}\n\n"
-                    f"ReAct steps:\n{history}\n\n"
-                    "The iteration limit was reached. Provide the safest "
-                    "useful final answer from available observations and "
-                    "state any limitation."
-                )
-            ),
-        ]
+        messages = self._finalize_messages(goal, memory)
         span_metadata = {
             "operation": "finalize",
             "timeout_seconds": self._timeout_seconds,
@@ -380,6 +465,69 @@ class GeminiReasoner:
         self._log_usage(response)
         return str(getattr(response, "content", response))
 
+    def _finalize_messages(self, goal: str, memory: Memory) -> list[Any]:
+        history = "\n".join(step.model_dump_json() for step in memory.steps())
+        return [
+            SystemMessage(content=SYSTEM_PROMPT),
+            HumanMessage(
+                content=(
+                    f"User goal:\n{goal}\n\n"
+                    f"ReAct steps:\n{history}\n\n"
+                    "The iteration limit was reached. Provide the safest "
+                    "useful final answer from available observations and "
+                    "state any limitation."
+                )
+            ),
+        ]
+
+    async def stream_finalize(self, goal: str, memory: Memory) -> AsyncIterator[str]:
+        astream = getattr(self._llm, "astream", None)
+        if not callable(astream):
+            final_response = await self.finalize(goal, memory)
+            for start in range(0, len(final_response), 32):
+                yield final_response[start : start + 32]
+            return
+
+        messages = self._finalize_messages(goal, memory)
+        span_metadata = {
+            "operation": "finalize-stream",
+            "timeout_seconds": self._timeout_seconds,
+        }
+        with agent_span("agent-reasoner", metadata=span_metadata) as span:
+            try:
+                async for chunk in _astream_llm_with_retry(
+                    lambda: astream(
+                        messages,
+                        config=langchain_config(
+                            "reasoner-finalize-stream",
+                            extra_metadata=span_metadata,
+                        ),
+                    ),
+                    operation="reasoner-finalize-stream",
+                    timeout_seconds=self._timeout_seconds,
+                    max_retries=self._max_retries,
+                    backoff_seconds=self._backoff_seconds,
+                ):
+                    text = _chunk_content(chunk)
+                    if text:
+                        yield text
+            except Exception as exc:
+                update_observation(
+                    span,
+                    operation="agent-reasoner",
+                    metadata={
+                        **span_metadata,
+                        "error_type": type(exc).__name__,
+                        "timed_out": isinstance(exc, TimeoutError),
+                        **_llm_error_metadata(exc),
+                    },
+                    level="ERROR",
+                    status_message=(
+                        f"Reasoner finalize stream failed with {type(exc).__name__}."
+                    ),
+                )
+                raise
+
     @staticmethod
     def _log_usage(response: Any, *, run_id: str = "") -> None:
         usage = getattr(response, "usage_metadata", None)
@@ -398,10 +546,7 @@ class LLMToolRouter:
         max_retries: int = 0,
         backoff_seconds: float = 0.5,
     ) -> None:
-        self._structured_llm = cast(Any, llm).bind(
-            response_mime_type="application/json",
-            response_schema=FallbackRouteDecision.model_json_schema(),
-        )
+        self._structured_llm = bind_structured_output(llm, FallbackRouteDecision)
         self._timeout_seconds = timeout_seconds
         self._max_retries = max_retries
         self._backoff_seconds = backoff_seconds
@@ -426,7 +571,9 @@ class LLMToolRouter:
                     "You are a fallback tool router. Select one available tool "
                     "that should gather evidence for the user goal. Do not answer "
                     "the user. Use only the provided tool names and input schemas. "
-                    "Return tool='none' only when no tool can help."
+                    "Return tool='none' only when no tool can help. "
+                    "Return valid JSON only. Do not wrap in markdown. "
+                    "Match the FallbackRouteDecision schema exactly."
                 )
             ),
             HumanMessage(
@@ -736,7 +883,7 @@ class FallbackReasoner:
             logger.warning(
                 "agent_provider_fallback",
                 operation="decide",
-                provider="gemini",
+                provider="llm",
                 error_type=type(exc).__name__,
             )
             return await self._fallback.decide(goal, memory, tools)
@@ -748,16 +895,53 @@ class FallbackReasoner:
             logger.warning(
                 "agent_provider_fallback",
                 operation="finalize",
-                provider="gemini",
+                provider="llm",
                 error_type=type(exc).__name__,
             )
             return await self._fallback.finalize(goal, memory)
+
+    async def stream_finalize(self, goal: str, memory: Memory) -> AsyncIterator[str]:
+        primary_stream = getattr(self._primary, "stream_finalize", None)
+        if callable(primary_stream):
+            try:
+                async for chunk in primary_stream(goal, memory):
+                    yield chunk
+                return
+            except Exception as exc:
+                logger.warning(
+                    "agent_provider_fallback",
+                    operation="stream_finalize",
+                    provider="llm",
+                    error_type=type(exc).__name__,
+                )
+        else:
+            try:
+                response = await self._primary.finalize(goal, memory)
+                for start in range(0, len(response), 32):
+                    yield response[start : start + 32]
+                return
+            except Exception as exc:
+                logger.warning(
+                    "agent_provider_fallback",
+                    operation="stream_finalize",
+                    provider="llm",
+                    error_type=type(exc).__name__,
+                )
+
+        fallback_stream = getattr(self._fallback, "stream_finalize", None)
+        if callable(fallback_stream):
+            async for chunk in fallback_stream(goal, memory):
+                yield chunk
+            return
+        response = await self._fallback.finalize(goal, memory)
+        for start in range(0, len(response), 32):
+            yield response[start : start + 32]
 
 
 __all__ = [
     "FallbackRouteDecision",
     "FallbackReasoner",
-    "GeminiReasoner",
+    "LLMReasoner",
     "LLMRoutedFallbackReasoner",
     "LLMToolRouter",
     "REACT_PROMPT",
