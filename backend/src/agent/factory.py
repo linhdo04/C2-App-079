@@ -2,6 +2,7 @@
 
 from core import settings
 
+from .checkpointing import get_agent_checkpointer
 from .guardrails import build_default_guardrails
 from .llm import llm
 from .react import Agent, AgentLoop, DoneOrMaxIterations, Executor, ToolRegistry
@@ -65,6 +66,8 @@ def create_default_agent() -> Agent:
                 max_retries=settings.agent_llm_max_retries,
                 backoff_seconds=settings.agent_llm_retry_backoff_seconds,
             ),
+            checkpointer_factory=get_agent_checkpointer,
+            checkpoint_durability=settings.agent_checkpoint_durability,
         )
     )
 

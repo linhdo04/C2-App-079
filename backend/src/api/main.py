@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from agent.checkpointing import close_agent_checkpointer, init_agent_checkpointer
 from core import settings, setup_logging
 from infrastructure import close_db, close_redis, get_redis, init_db, init_redis
 
@@ -29,6 +30,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     setup_logging(level=settings.log_level, json_indent=2)
     logger_init = structlog.get_logger("init")
     await init_db()
+    await init_agent_checkpointer()
     await init_redis()
     try:
         app.state.redis = get_redis()
@@ -36,6 +38,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger_init.warning("rate_limit_no_redis", error=str(e))
 
     yield
+    await close_agent_checkpointer()
     await close_db()
     await close_redis()
 

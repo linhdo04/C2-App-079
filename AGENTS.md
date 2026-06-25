@@ -89,6 +89,7 @@ Current ADRs include:
 - SQLModel + PostgreSQL
 - Redis rate limiting
 - LangChain/DeepSeek integration
+- LangGraph agent runtime
 
 Do not replace established architectural patterns unless explicitly instructed.
 

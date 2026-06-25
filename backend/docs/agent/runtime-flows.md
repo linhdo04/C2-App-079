@@ -1,8 +1,9 @@
 # Luồng chạy AI Agent
 
 Tài liệu này mô tả luồng chạy hiện tại của production agent trong
-`backend/src/agent/`. Agent dùng một ReAct loop chung cho mọi trường hợp; khác
-biệt nằm ở entrypoint HTTP, memory, streaming/persistence và tool được chọn.
+`backend/src/agent/`. Agent dùng một LangGraph `StateGraph` chung cho mọi
+trường hợp; khác biệt nằm ở entrypoint HTTP, memory, streaming/persistence và
+tool được chọn.
 
 ## Luồng tổng quát
 
@@ -11,16 +12,16 @@ HTTP request
 -> xác thực user
 -> tạo/nạp memory nếu là chat
 -> run_agent() hoặc stream_agent()
--> input guardrails
--> ReAct loop:
-   -> reasoner chọn action hoặc final answer
+-> LangGraph StateGraph:
+   -> input guardrails
+   -> tool policy/reasoner chọn action hoặc final answer
    -> executor validate input tool
    -> chạy tool nếu có
    -> sanitize observation
-   -> lưu step vào memory tạm
+   -> lưu step vào graph state/checkpoint
    -> lặp lại hoặc dừng
--> final answer
--> output guardrails
+   -> finalize nếu cần
+   -> output guardrails
 -> trả response hoặc stream token
 -> persist chat nếu là chat endpoint
 ```
@@ -45,7 +46,7 @@ POST /agent/ask
 -> get_current_user
 -> run_agent(question, user_id)
 -> InMemoryMemory rỗng
--> ReAct loop
+-> LangGraph runtime
 -> trả AgentAnswerPublic(answer)
 ```
 
@@ -67,7 +68,7 @@ POST /agent/chats/{chat_id}/messages
 -> kiểm tra chat còn active và thuộc user
 -> load history gần nhất theo giới hạn memory
 -> run_agent(question, user_id, session_id=chat_id, history)
--> ReAct loop
+-> LangGraph runtime
 -> persist user message + assistant message
 -> cập nhật title nếu chat còn là "Cuộc trò chuyện mới"
 -> trả ChatMessageResponse
@@ -116,7 +117,7 @@ Production agent dùng `FallbackReasoner`:
 
 ```text
 LLMReasoner.decide()
--> nếu LLM lỗi/timeout: HeuristicReasoner.decide()
+-> nếu LLM lỗi/timeout: LLMRoutedFallbackReasoner.decide()
 ```
 
 LLM nhận:
@@ -135,6 +136,10 @@ LLM có thể:
 Nếu primary LLM reasoner lỗi, fallback router dùng một schema nhỏ để chọn
 tool từ catalog. Nếu router cũng lỗi, lỗi được trả về API/SSE để user biết hệ
 thống AI đang gián đoạn; agent không tự mặc định chạy `search`.
+
+LangGraph checkpointing dùng `thread_id=chat:{chat_id}` cho chat và
+`thread_id=run:{run_id}` cho `/agent/ask`. Checkpoint giúp lưu runtime state;
+chat UI vẫn đọc/ghi từ `ChatHistoryModel`.
 
 Loop cũng có guard deterministic cho telemetry: nếu telemetry đã trả “không có
 dữ liệu” thì agent không được dùng `search` để thay thế dữ liệu sensor, trừ khi

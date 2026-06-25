@@ -67,6 +67,15 @@ class Settings(BaseSettings):
     agent_guardrails_block_prompt_injection: bool = Field(
         alias="AGENT_GUARDRAILS_BLOCK_PROMPT_INJECTION", default=True
     )
+    agent_checkpointing_enabled: bool = Field(
+        alias="AGENT_CHECKPOINTING_ENABLED", default=True
+    )
+    agent_checkpoint_durability: Literal["sync", "async", "exit"] = Field(
+        alias="AGENT_CHECKPOINT_DURABILITY", default="sync"
+    )
+    langgraph_checkpoint_setup_on_start: bool = Field(
+        alias="LANGGRAPH_CHECKPOINT_SETUP_ON_START", default=True
+    )
 
     app_name: str = Field(alias="APP_NAME", default="Autonomous Drones")
     app_domain: str = Field(alias="APP_DOMAIN", default="127.0.0.1")

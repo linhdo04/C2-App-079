@@ -9,9 +9,10 @@ import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, NotRequired, Protocol, TypedDict, cast
 
 import structlog
+from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from .guardrails import GuardrailPipeline
@@ -95,6 +96,20 @@ class Tool(ABC):
     def schema(self) -> dict[str, Any]:
         return self.input_model.model_json_schema()
 
+    def as_langchain_tool(self, context: ToolContext) -> Any:
+        """Adapt this project tool to a LangChain structured tool."""
+        from langchain_core.tools import StructuredTool
+
+        async def _execute(**kwargs: Any) -> str:
+            return await self.execute(self.input_model.model_validate(kwargs), context)
+
+        return StructuredTool.from_function(
+            coroutine=_execute,
+            name=self.name,
+            description=self.description,
+            args_schema=self.input_model,
+        )
+
 
 ToolHandler = Callable[[BaseModel, ToolContext], Awaitable[str]]
 
@@ -169,6 +184,25 @@ class InMemoryMemory:
 
     def conversation(self) -> tuple[ConversationMessage, ...]:
         return self._history
+
+
+class _RuntimeMemory:
+    def __init__(
+        self,
+        conversation: Sequence[ConversationMessage],
+        steps: Sequence[ReActStep],
+    ) -> None:
+        self._conversation = tuple(conversation)
+        self._steps = tuple(steps)
+
+    def add(self, step: ReActStep) -> None:
+        self._steps = (*self._steps, step)
+
+    def steps(self) -> tuple[ReActStep, ...]:
+        return self._steps
+
+    def conversation(self) -> tuple[ConversationMessage, ...]:
+        return self._conversation
 
 
 class Reasoner(Protocol):
@@ -529,6 +563,25 @@ class AgentLoopResult:
 
 
 StepCallback = Callable[[int, ReActStep], Awaitable[None] | None]
+CheckpointerFactory = Callable[[], Any | None]
+
+
+class _AgentGraphState(TypedDict):
+    goal: str
+    safe_goal: str
+    user_id: int | None
+    session_id: str | None
+    run_id: str
+    conversation: list[dict[str, Any]]
+    steps: list[dict[str, Any]]
+    calls: list[str]
+    iteration: int
+    final_response: str
+    done: bool
+    termination_reason: TerminationReason
+    completed: bool
+    action: NotRequired[dict[str, Any] | None]
+    thought: NotRequired[str]
 
 
 async def _emit(callback: EventCallback | None, event: AgentEvent) -> None:
@@ -549,6 +602,8 @@ class AgentLoop:
         max_iterations: int = 6,
         guardrails: GuardrailPipeline | None = None,
         tool_policy: ToolPolicy | None = None,
+        checkpointer_factory: CheckpointerFactory | None = None,
+        checkpoint_durability: Literal["sync", "async", "exit"] = "sync",
     ) -> None:
         if max_iterations <= 0:
             raise ValueError("max_iterations must be positive")
@@ -558,6 +613,8 @@ class AgentLoop:
         self.max_iterations = max_iterations
         self.guardrails = guardrails
         self.tool_policy = tool_policy
+        self.checkpointer_factory = checkpointer_factory
+        self.checkpoint_durability = checkpoint_durability
 
     async def run(
         self,
@@ -579,181 +636,73 @@ class AgentLoop:
         started_at = time.perf_counter()
 
         try:
-            checked_goal = (
-                self.guardrails.check_input(goal)
-                if self.guardrails is not None
+            active_memory = memory or InMemoryMemory()
+            initial_state: _AgentGraphState = {
+                "goal": goal,
+                "safe_goal": goal,
+                "user_id": user_id,
+                "session_id": session_id,
+                "run_id": run_id,
+                "conversation": [
+                    message.model_dump(mode="json")
+                    for message in active_memory.conversation()
+                ],
+                "steps": [
+                    step.model_dump(mode="json") for step in active_memory.steps()
+                ],
+                "calls": [],
+                "iteration": 0,
+                "final_response": "",
+                "done": False,
+                "termination_reason": "max_iterations",
+                "completed": False,
+            }
+            checkpointer = (
+                self.checkpointer_factory()
+                if self.checkpointer_factory is not None
                 else None
             )
-            if checked_goal is not None and checked_goal.blocked:
-                duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
-                logger.warning(
-                    "agent_guardrail_blocked",
-                    run_id=run_id,
-                    stage="input",
-                    reason=checked_goal.reason,
-                )
-                await _emit(
-                    on_event,
-                    AgentEvent(
-                        "completed",
-                        run_id,
-                        0,
-                        duration_ms=duration_ms,
-                        termination_reason="guardrail_blocked",
+            graph = self._compile_graph(
+                on_step=on_step,
+                on_event=on_event,
+                checkpointer=checkpointer,
+            )
+            config = {
+                "configurable": {
+                    "thread_id": self._thread_id(run_id, session_id),
+                    "checkpoint_ns": "agent-runtime",
+                },
+                "metadata": {
+                    "agent_run_id": run_id,
+                    "agent_session_id": session_id,
+                    "agent_user_id": str(user_id) if user_id is not None else None,
+                },
+                "run_name": "agent-langgraph-runtime",
+            }
+
+            with agent_run_observation(trace_context, question=goal) as observation:
+                final_state = cast(
+                    _AgentGraphState,
+                    await graph.ainvoke(
+                        initial_state,
+                        config=config,
+                        durability=(
+                            self.checkpoint_durability
+                            if checkpointer is not None
+                            else None
+                        ),
                     ),
                 )
-                return AgentLoopResult(
-                    final_response=checked_goal.content,
-                    done=False,
-                    iterations=0,
-                    steps=(),
-                    termination_reason="guardrail_blocked",
-                    run_id=run_id,
+
+                steps = tuple(
+                    ReActStep.model_validate(step) for step in final_state["steps"]
                 )
-
-            safe_goal = checked_goal.content if checked_goal is not None else goal
-            active_memory = memory or InMemoryMemory()
-            context = ToolContext(goal=safe_goal, user_id=user_id, run_id=run_id)
-            calls: set[str] = set()
-            reason: TerminationReason = "max_iterations"
-            done = False
-            final_response = ""
-            last_iteration = 0
-
-            with agent_run_observation(
-                trace_context, question=safe_goal
-            ) as observation:
-                for iteration in range(1, self.max_iterations + 1):
-                    last_iteration = iteration
-                    try:
-                        tools = self.executor.registry.list()
-                        policy_action = (
-                            await self.tool_policy.decide(
-                                safe_goal, active_memory, tools
-                            )
-                            if self.tool_policy is not None
-                            and not _should_skip_tool_policy_after_terminal_telemetry(
-                                safe_goal,
-                                active_memory,
-                            )
-                            else None
-                        )
-                        if policy_action is not None:
-                            decision = ReasoningDecision(
-                                thought=(
-                                    f"Policy selected {policy_action.tool}"
-                                    " for required evidence."
-                                ),
-                                action=policy_action,
-                            )
-                        else:
-                            decision = await self.reasoner.decide(
-                                safe_goal, active_memory, tools
-                            )
-                    except Exception as exc:
-                        logger.error(
-                            "agent_reasoner_failed",
-                            run_id=run_id,
-                            iteration=iteration,
-                            error_type=type(exc).__name__,
-                        )
-                        raise
-
-                    if decision.is_done:
-                        final_response = decision.final_answer or ""
-                        step = ReActStep(
-                            thought=decision.thought,
-                            action=None,
-                            observation=final_response,
-                            is_done=True,
-                        )
-                        done = True
-                        reason = "done"
-                    else:
-                        action = decision.action
-                        if action is None:
-                            reason = "reasoner_error"
-                            break
-                        guarded_response = _decision_guard_response(
-                            safe_goal, action, active_memory
-                        )
-                        if guarded_response is not None:
-                            final_response = guarded_response
-                            step = ReActStep(
-                                thought=decision.thought,
-                                action=None,
-                                observation=final_response,
-                                is_done=True,
-                            )
-                            done = True
-                            reason = "done"
-                            logger.info(
-                                "agent_decision_guarded",
-                                run_id=run_id,
-                                iteration=iteration,
-                                tool=action.tool,
-                            )
-                            active_memory.add(step)
-                            if on_step is not None:
-                                callback_result = on_step(iteration, step)
-                                if inspect.isawaitable(callback_result):
-                                    await callback_result
-                            break
-                        call_key = (
-                            f"{action.tool}:{json.dumps(action.input, sort_keys=True)}"
-                        )
-                        if call_key in calls:
-                            reason = "no_progress"
-                            break
-                        calls.add(call_key)
-                        execution = await self.executor.execute(
-                            action,
-                            context,
-                            iteration=iteration,
-                            on_event=on_event,
-                        )
-                        step = ReActStep(
-                            thought=decision.thought,
-                            action=action,
-                            observation=execution.observation,
-                        )
-
-                    active_memory.add(step)
-                    if on_step is not None:
-                        callback_result = on_step(iteration, step)
-                        if inspect.isawaitable(callback_result):
-                            await callback_result
-                    if done:
-                        break
-
-                if not final_response:
-                    try:
-                        final_response = await self.reasoner.finalize(
-                            safe_goal, active_memory
-                        )
-                    except Exception:
-                        final_response = "Tôi chưa thể hoàn tất yêu cầu vào lúc này."
-                if self.guardrails is not None:
-                    output_decision = self.guardrails.check_output(final_response)
-                    if output_decision.blocked:
-                        logger.warning(
-                            "agent_guardrail_blocked",
-                            run_id=run_id,
-                            stage="output",
-                            reason=output_decision.reason,
-                        )
-                        final_response = output_decision.content
-                        reason = "guardrail_blocked"
-                        done = False
-                    else:
-                        final_response = output_decision.content
-
                 result = AgentLoopResult(
-                    final_response=final_response,
-                    done=done,
-                    iterations=last_iteration,
-                    steps=active_memory.steps(),
-                    termination_reason=reason,
+                    final_response=final_state["final_response"],
+                    done=final_state["done"],
+                    iterations=final_state["iteration"],
+                    steps=steps,
+                    termination_reason=final_state["termination_reason"],
                     run_id=run_id,
                 )
                 duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
@@ -762,18 +711,22 @@ class AgentLoop:
                         output={"response": result.final_response},
                         metadata={
                             "iterations": result.iterations,
-                            "termination_reason": reason,
-                            "success": done,
+                            "termination_reason": result.termination_reason,
+                            "success": result.done,
                             "duration_ms": duration_ms,
+                            "runtime": "langgraph",
+                            "checkpointed": checkpointer is not None,
                         },
                     )
                 logger.info(
                     "agent_run_summary",
                     run_id=run_id,
-                    success=done,
+                    success=result.done,
                     duration_ms=duration_ms,
                     iterations=result.iterations,
-                    termination_reason=reason,
+                    termination_reason=result.termination_reason,
+                    runtime="langgraph",
+                    checkpointed=checkpointer is not None,
                 )
                 await _emit(
                     on_event,
@@ -782,12 +735,290 @@ class AgentLoop:
                         run_id,
                         result.iterations,
                         duration_ms=duration_ms,
-                        termination_reason=reason,
+                        termination_reason=result.termination_reason,
                     ),
                 )
                 return result
         finally:
             reset_trace_context(trace_token)
+
+    def _compile_graph(
+        self,
+        *,
+        on_step: StepCallback | None,
+        on_event: EventCallback | None,
+        checkpointer: Any | None,
+    ) -> Any:
+        graph: StateGraph[_AgentGraphState] = StateGraph(_AgentGraphState)
+        graph.add_node("input_guardrail", self._input_guardrail_node)
+        graph.add_node("plan", self._plan_node(on_step))
+        graph.add_node("execute_tool", self._execute_tool_node(on_step, on_event))
+        graph.add_node("finalize", self._finalize_node)
+        graph.add_edge(START, "input_guardrail")
+        graph.add_conditional_edges(
+            "input_guardrail",
+            self._route_after_input,
+            {"plan": "plan", "end": END},
+        )
+        graph.add_conditional_edges(
+            "plan",
+            self._route_after_plan,
+            {"execute_tool": "execute_tool", "finalize": "finalize", "end": END},
+        )
+        graph.add_conditional_edges(
+            "execute_tool",
+            self._route_after_execute,
+            {"plan": "plan", "finalize": "finalize"},
+        )
+        graph.add_edge("finalize", END)
+        return graph.compile(checkpointer=checkpointer)
+
+    async def _input_guardrail_node(self, state: _AgentGraphState) -> dict[str, Any]:
+        checked_goal = (
+            self.guardrails.check_input(state["goal"])
+            if self.guardrails is not None
+            else None
+        )
+        if checked_goal is not None and checked_goal.blocked:
+            logger.warning(
+                "agent_guardrail_blocked",
+                run_id=state["run_id"],
+                stage="input",
+                reason=checked_goal.reason,
+            )
+            return {
+                "safe_goal": checked_goal.content,
+                "final_response": checked_goal.content,
+                "done": False,
+                "termination_reason": "guardrail_blocked",
+                "completed": True,
+            }
+        return {
+            "safe_goal": checked_goal.content
+            if checked_goal is not None
+            else state["goal"]
+        }
+
+    def _plan_node(self, on_step: StepCallback | None) -> Any:
+        async def node(state: _AgentGraphState) -> dict[str, Any]:
+            iteration = state["iteration"] + 1
+            memory = self._memory_from_state(state)
+            tools = self.executor.registry.list()
+            try:
+                policy_action = (
+                    await self.tool_policy.decide(state["safe_goal"], memory, tools)
+                    if self.tool_policy is not None
+                    and not _should_skip_tool_policy_after_terminal_telemetry(
+                        state["safe_goal"],
+                        memory,
+                    )
+                    else None
+                )
+                if policy_action is not None:
+                    decision = ReasoningDecision(
+                        thought=(
+                            f"Policy selected {policy_action.tool}"
+                            " for required evidence."
+                        ),
+                        action=policy_action,
+                    )
+                else:
+                    decision = await self.reasoner.decide(
+                        state["safe_goal"], memory, tools
+                    )
+            except Exception as exc:
+                logger.error(
+                    "agent_reasoner_failed",
+                    run_id=state["run_id"],
+                    iteration=iteration,
+                    error_type=type(exc).__name__,
+                )
+                raise
+
+            if decision.is_done:
+                final_response = decision.final_answer or ""
+                step = ReActStep(
+                    thought=decision.thought,
+                    action=None,
+                    observation=final_response,
+                    is_done=True,
+                )
+                steps = [*state["steps"], step.model_dump(mode="json")]
+                await self._emit_step(on_step, iteration, step)
+                return {
+                    "iteration": iteration,
+                    "steps": steps,
+                    "final_response": final_response,
+                    "done": True,
+                    "termination_reason": "done",
+                    "completed": True,
+                    "action": None,
+                }
+
+            action = decision.action
+            if action is None:
+                return {
+                    "iteration": iteration,
+                    "termination_reason": "reasoner_error",
+                    "completed": True,
+                    "action": None,
+                }
+
+            guarded_response = _decision_guard_response(
+                state["safe_goal"], action, memory
+            )
+            if guarded_response is not None:
+                step = ReActStep(
+                    thought=decision.thought,
+                    action=None,
+                    observation=guarded_response,
+                    is_done=True,
+                )
+                steps = [*state["steps"], step.model_dump(mode="json")]
+                await self._emit_step(on_step, iteration, step)
+                logger.info(
+                    "agent_decision_guarded",
+                    run_id=state["run_id"],
+                    iteration=iteration,
+                    tool=action.tool,
+                )
+                return {
+                    "iteration": iteration,
+                    "steps": steps,
+                    "final_response": guarded_response,
+                    "done": True,
+                    "termination_reason": "done",
+                    "completed": True,
+                    "action": None,
+                }
+
+            call_key = f"{action.tool}:{json.dumps(action.input, sort_keys=True)}"
+            if call_key in state["calls"]:
+                return {
+                    "iteration": iteration,
+                    "termination_reason": "no_progress",
+                    "completed": True,
+                    "action": None,
+                }
+            return {
+                "iteration": iteration,
+                "calls": [*state["calls"], call_key],
+                "action": action.model_dump(mode="json"),
+                "thought": decision.thought,
+                "completed": False,
+            }
+
+        return node
+
+    def _execute_tool_node(
+        self,
+        on_step: StepCallback | None,
+        on_event: EventCallback | None,
+    ) -> Any:
+        async def node(state: _AgentGraphState) -> dict[str, Any]:
+            raw_action = state.get("action")
+            if raw_action is None:
+                return {"completed": True, "termination_reason": "reasoner_error"}
+            action = Action.model_validate(raw_action)
+            execution = await self.executor.execute(
+                action,
+                ToolContext(
+                    goal=state["safe_goal"],
+                    user_id=state["user_id"],
+                    run_id=state["run_id"],
+                ),
+                iteration=state["iteration"],
+                on_event=on_event,
+            )
+            step = ReActStep(
+                thought=state.get("thought", "Tool execution."),
+                action=action,
+                observation=execution.observation,
+            )
+            await self._emit_step(on_step, state["iteration"], step)
+            completed = state["iteration"] >= self.max_iterations
+            return {
+                "steps": [*state["steps"], step.model_dump(mode="json")],
+                "action": None,
+                "completed": completed,
+                "termination_reason": (
+                    "max_iterations" if completed else state["termination_reason"]
+                ),
+            }
+
+        return node
+
+    async def _finalize_node(self, state: _AgentGraphState) -> dict[str, Any]:
+        final_response = state["final_response"]
+        reason = state["termination_reason"]
+        done = state["done"]
+        if not final_response:
+            try:
+                final_response = await self.reasoner.finalize(
+                    state["safe_goal"], self._memory_from_state(state)
+                )
+            except Exception:
+                final_response = "Tôi chưa thể hoàn tất yêu cầu vào lúc này."
+        if self.guardrails is not None:
+            output_decision = self.guardrails.check_output(final_response)
+            if output_decision.blocked:
+                logger.warning(
+                    "agent_guardrail_blocked",
+                    run_id=state["run_id"],
+                    stage="output",
+                    reason=output_decision.reason,
+                )
+                final_response = output_decision.content
+                reason = "guardrail_blocked"
+                done = False
+            else:
+                final_response = output_decision.content
+        return {
+            "final_response": final_response,
+            "termination_reason": reason,
+            "done": done,
+            "completed": True,
+        }
+
+    @staticmethod
+    def _route_after_input(state: _AgentGraphState) -> str:
+        return "end" if state["completed"] else "plan"
+
+    @staticmethod
+    def _route_after_plan(state: _AgentGraphState) -> str:
+        if state["completed"]:
+            return "finalize"
+        return "execute_tool" if state.get("action") is not None else "finalize"
+
+    @staticmethod
+    def _route_after_execute(state: _AgentGraphState) -> str:
+        return "finalize" if state["completed"] else "plan"
+
+    @staticmethod
+    def _thread_id(run_id: str, session_id: str | None) -> str:
+        return f"chat:{session_id}" if session_id is not None else f"run:{run_id}"
+
+    @staticmethod
+    async def _emit_step(
+        callback: StepCallback | None,
+        iteration: int,
+        step: ReActStep,
+    ) -> None:
+        if callback is None:
+            return
+        result = callback(iteration, step)
+        if inspect.isawaitable(result):
+            await result
+
+    @staticmethod
+    def _memory_from_state(state: _AgentGraphState) -> Memory:
+        return _RuntimeMemory(
+            [
+                ConversationMessage.model_validate(message)
+                for message in state["conversation"]
+            ],
+            [ReActStep.model_validate(step) for step in state["steps"]],
+        )
 
 
 class Agent:
