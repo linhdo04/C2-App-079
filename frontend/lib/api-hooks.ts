@@ -5,7 +5,14 @@ import { requestApi, requestProtected } from "@/lib/api-client";
 import type { ApiResponse, CursorMeta } from "@/types/api";
 import type { AgentAskRequest, AgentResponse, ChatDetail, ChatMessageResponse, ChatSession } from "@/types/agent";
 import type { LoginRequest, RegisterRequest, TokenResponse, User } from "@/types/auth";
-import type { CostBudget, CostBudgetUpdateRequest, CostSummary, CostUsageResponse } from "@/types/cost-management";
+import type {
+  CostBudget,
+  CostBudgetUpdateRequest,
+  CostSummary,
+  CostUsageResponse,
+  EvaluationMetricsResponse,
+  UserMonthlyCostReport,
+} from "@/types/cost-management";
 import type { TelemetryResponse } from "@/types/dashboard";
 
 export function useCurrentUserQuery(isAuthenticated: boolean) {
@@ -37,6 +44,28 @@ export function useCostUsageQuery() {
   return useQuery({
     queryKey: ["admin", "cost-management", "usage"],
     queryFn: () => requestProtected<CostUsageResponse>("/admin/cost-management/usage?limit=25"),
+    refetchInterval: 60_000,
+  });
+}
+
+export function useEvaluationMetricsQuery() {
+  return useQuery({
+    queryKey: ["admin", "cost-management", "evaluation-metrics"],
+    queryFn: () =>
+      requestProtected<ApiResponse<EvaluationMetricsResponse>>("/admin/cost-management/evaluation-metrics").then(
+        (response) => response.data,
+      ),
+    refetchInterval: 60_000,
+  });
+}
+
+export function useUserMonthlyCostReportQuery() {
+  return useQuery({
+    queryKey: ["admin", "cost-management", "user-monthly-report"],
+    queryFn: () =>
+      requestProtected<ApiResponse<UserMonthlyCostReport>>("/admin/cost-management/user-monthly-report").then(
+        (response) => response.data,
+      ),
     refetchInterval: 60_000,
   });
 }

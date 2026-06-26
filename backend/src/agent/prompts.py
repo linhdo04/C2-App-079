@@ -1,4 +1,15 @@
-SYSTEM_PROMPT = """
+"""Agent prompts loaded from Langfuse with safe local fallbacks."""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+
+from . import tracing
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_SYSTEM_PROMPT = """
 You are an AI assistant supporting agricultural production in Vietnam.
 
 Your task is to synthesize an answer from the user's question and the data
@@ -50,7 +61,7 @@ Response style:
   missing for a reliable recommendation.
 """.strip()
 
-REACT_PROMPT = """
+_DEFAULT_REACT_PROMPT = """
 You are the planner in a ReAct agent loop.
 
 Choose exactly one next action, or finish with a final answer. The `thought`
@@ -73,12 +84,13 @@ When the goal is complete:
  "is_done":true,"final_answer":"answer for the user"}
 """.strip()
 
-TOOL_POLICY_PROMPT = """
+_DEFAULT_TOOL_POLICY_PROMPT = """
 You are a semantic tool policy classifier for an agricultural assistant.
 
 Do not answer the user. Return only a structured tool plan using available tool
 names and schemas. Choose tools that should gather evidence before the final
-answer; leave actions empty when no tool is required.
+answer; leave actions empty when no tool is required or when previous
+observations are enough for the reasoner to finalize.
 
 Source priority rules:
 1. Prefer first-party user data before external sources. If the request may
@@ -109,8 +121,13 @@ Source priority rules:
 3. Use analysis for crop production estimates when crop, area, yield, or season
    data should be analyzed.
 4. Use calculator only for arithmetic or numeric calculations.
-5. Do not repeat tools already listed in Previous tool calls unless the input
-   must materially differ.
+5. Use the recent conversation to resolve short follow-up answers such as a
+   location, crop, or time window. Do not classify the current user goal in
+   isolation when it completes a prior assistant clarification question.
+6. Do not repeat tools already listed in Previous tool calls unless the input
+   must materially differ. If Previous observations already contain source data
+   for the user's request, return no actions so the reasoner can synthesize the
+   final answer.
 
 Return valid JSON only. Do not wrap in markdown. Match the ToolPolicyDecision
 schema exactly. Return actions in the exact order they should be executed.
@@ -118,3 +135,59 @@ Include a short reason for each action and a top-level rationale, for example:
 {"actions":[{"tool":"telemetry","input":{"query_kinds":["temperature_max"]},
 "reason":"Need first-party telemetry."}],"rationale":"Use telemetry first."}
 """.strip()
+
+
+@dataclass(frozen=True)
+class _PromptSpec:
+    name: str
+    fallback: str
+    required_markers: tuple[str, ...]
+
+
+def _load_prompt(spec: _PromptSpec) -> str:
+    if not tracing.langfuse_enabled():
+        return spec.fallback
+
+    try:
+        prompt = tracing._get_langfuse_client().get_prompt(spec.name).prompt
+    except Exception as exc:  # pragma: no cover - depends on external Langfuse
+        logger.warning("Falling back to local %s prompt: %s", spec.name, exc)
+        return spec.fallback
+
+    text = str(prompt).strip()
+    if not text or any(marker not in text for marker in spec.required_markers):
+        logger.warning(
+            "Falling back to local %s prompt because Langfuse content failed "
+            "required marker validation",
+            spec.name,
+        )
+        return spec.fallback
+    return text
+
+
+SYSTEM_PROMPT = _load_prompt(
+    _PromptSpec(
+        name="system_prompt",
+        fallback=_DEFAULT_SYSTEM_PROMPT,
+        required_markers=(
+            "agricultural production in Vietnam",
+            "numbered inline citation links",
+        ),
+    )
+)
+
+REACT_PROMPT = _load_prompt(
+    _PromptSpec(
+        name="react_prompt",
+        fallback=_DEFAULT_REACT_PROMPT,
+        required_markers=("ReAct agent loop", "one short sentence"),
+    )
+)
+
+TOOL_POLICY_PROMPT = _load_prompt(
+    _PromptSpec(
+        name="tool_policy_prompt",
+        fallback=_DEFAULT_TOOL_POLICY_PROMPT,
+        required_markers=("semantic tool policy classifier", "ToolPolicyDecision"),
+    )
+)

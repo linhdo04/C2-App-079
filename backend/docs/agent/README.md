@@ -68,6 +68,10 @@ LangChain/DeepSeek calls được gửi qua Langfuse callback để giữ model,
 và generation metadata. Chat routes truyền `chat_id` làm `session_id` để nhóm
 multi-turn conversations trong Langfuse Sessions view.
 
+Cost Management lưu local từng LLM usage event và metric tổng hợp cho mỗi
+agent run (`agent_run_metrics`) theo `run_id`, gồm latency, iterations,
+termination reason, success, streamed flag, tổng token và cost.
+
 Tool execution được bọc bằng span metadata cấp cao (`tool`, `iteration`,
 `attempt`) nhưng không ghi raw tool observation để giảm rủi ro lộ dữ liệu nội bộ.
 
@@ -78,6 +82,9 @@ Decision guards trước khi chạy tool được cấu hình bằng
 `DecisionGuardPolicy`. Các rule này xử lý những trường hợp điều phối có rủi ro
 như không thay thế telemetry nội bộ bằng web search khi user chưa yêu cầu nguồn
 bên ngoài, hoặc yêu cầu bổ sung ngày/tháng/năm khi query telemetry còn mơ hồ.
+File config cũng khai báo các điều kiện bỏ qua tool policy sau observation đã
+đủ dữ liệu để reasoner tổng hợp, ví dụ sau search hoặc telemetry point-query,
+nhằm tránh loop tiếp tục gọi tool khi không còn cần thu thập thêm bằng chứng.
 Graph runtime chỉ gọi policy evaluator, không nhúng trực tiếp regex, tool name
 hay response text vào node logic. Các message/status user-facing của agent được
 cấu hình ở `backend/src/agent/agent_messages.json` và được lookup qua
