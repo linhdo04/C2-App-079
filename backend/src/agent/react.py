@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 from .agent_messages import load_agent_messages
 from .decision_guards import load_decision_guard_policy
 from .guardrails import GuardrailPipeline
+from .run_metrics import record_agent_run_metric
 from .tracing import (
     AgentTraceContext,
     agent_run_observation,
@@ -743,6 +744,16 @@ class AgentLoop:
                         termination_reason=result.termination_reason,
                     ),
                 )
+                await record_agent_run_metric(
+                    run_id=run_id,
+                    user_id=user_id,
+                    session_id=session_id,
+                    duration_ms=duration_ms,
+                    iterations=result.iterations,
+                    success=result.done,
+                    termination_reason=result.termination_reason,
+                    streamed=False,
+                )
                 return result
         finally:
             reset_trace_context(trace_token)
@@ -862,6 +873,16 @@ class AgentLoop:
                         duration_ms=duration_ms,
                         termination_reason=result.termination_reason,
                     ),
+                )
+                await record_agent_run_metric(
+                    run_id=run_id,
+                    user_id=user_id,
+                    session_id=session_id,
+                    duration_ms=duration_ms,
+                    iterations=result.iterations,
+                    success=result.done,
+                    termination_reason=result.termination_reason,
+                    streamed=True,
                 )
                 yield {"event": "result", "result": result}
         finally:

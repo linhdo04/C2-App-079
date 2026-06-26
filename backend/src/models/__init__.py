@@ -4,7 +4,7 @@ from .chat_session import ChatSessionModel
 from .coverage_result import CoverageResultModel
 from .flight_path import FlightPathModel
 from .iot_node import IoTNodeModel
-from .llm_usage import CostBudgetModel, LLMUsageEventModel
+from .llm_usage import AgentRunMetricModel, CostBudgetModel, LLMUsageEventModel
 from .mission import MissionModel
 from .report import ReportModel
 from .telemetry import TelemetryModel
@@ -21,6 +21,7 @@ __all__ = [
     "ChatHistoryModel",
     "ChatSessionModel",
     "LLMUsageEventModel",
+    "AgentRunMetricModel",
     "CostBudgetModel",
     "BaseModel",
     "UserRole",

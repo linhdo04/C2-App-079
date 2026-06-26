@@ -268,10 +268,76 @@ async def test_exact_telemetry_keeps_second_policy_call_for_external_intent() ->
         tool_policy=policy,
     ).run("Nhiệt độ cao nhất hôm nay và dự báo thời tiết hôm nay thế nào?")
 
-    assert policy.calls == 3
+    assert policy.calls == 2
     assert search_calls == 1
     assert reasoner.calls == 1
     assert result.final_response == "Nhiệt độ cao nhất là 35.0°C và có mưa."
+
+
+@pytest.mark.asyncio
+async def test_search_observation_skips_policy_and_lets_reasoner_finalize() -> None:
+    search_calls: list[dict[str, Any]] = []
+
+    async def search(tool_input: BaseModel, context: ToolContext) -> str:
+        data = SearchInput.model_validate(tool_input)
+        search_calls.append(data.model_dump())
+        return (
+            "Coverage: partial\nRejected results: 0\n\n"
+            "- Title: Dự báo thời tiết Hà Nội\n"
+            "  URL: https://example.com/ha-noi-weather\n"
+            "  Snippet: Hà Nội ngày mai có mưa rào về tối.\n"
+            "  Relevance: Dự báo đúng địa điểm người dùng vừa cung cấp."
+        )
+
+    search_tool = CallableTool(
+        "search",
+        "Search web",
+        search,
+        input_model=SearchInput,
+    )
+    memory = InMemoryMemory(
+        [
+            ConversationMessage(
+                role="user",
+                content="Dự báo thời tiết ngày mai cho ruộng tôi",
+            ),
+            ConversationMessage(
+                role="assistant",
+                content="Bạn vui lòng cung cấp tỉnh/thành phố của ruộng.",
+            ),
+        ]
+    )
+    reasoner = SequenceReasoner(
+        [
+            ReasoningDecision(
+                thought="Complete from search observation.",
+                is_done=True,
+                final_answer="Ngày mai Hà Nội có khả năng mưa rào về tối.",
+            )
+        ]
+    )
+    policy = SequenceToolPolicy(
+        [
+            Action(
+                tool="search",
+                input={"query": "dự báo thời tiết Hà Nội ngày mai"},
+            ),
+            Action(tool="search", input={"query": "nông nghiệp Hà Nội"}),
+        ]
+    )
+
+    result = await create_loop(
+        reasoner,
+        [search_tool],
+        tool_policy=policy,
+    ).run("hà nội", memory=memory)
+
+    assert search_calls == [
+        {"query": "dự báo thời tiết Hà Nội ngày mai", "max_results": 5}
+    ]
+    assert policy.calls == 1
+    assert reasoner.calls == 1
+    assert result.final_response == "Ngày mai Hà Nội có khả năng mưa rào về tối."
 
 
 @pytest.mark.asyncio

@@ -31,6 +31,55 @@ export type CostSummary = {
   daily: DailyCost[];
 };
 
+export type EvaluationMetric = {
+  key: string;
+  label: string;
+  unit: "ms" | "percent" | "usd" | "usd_per_user_month" | string;
+  direction: "lower_better" | "higher_better" | string;
+  current_value: number | null;
+  baseline_value: number | null;
+  delta_value: number | null;
+  delta_percent: number | null;
+  sample_count: number;
+};
+
+export type EvaluationMetricsResponse = {
+  range: {
+    start: string;
+    end: string;
+  };
+  baseline_range: {
+    start: string;
+    end: string;
+  };
+  metrics: EvaluationMetric[];
+};
+
+export type UserMonthlyCostReportItem = {
+  user_id: number | null;
+  user_name: string;
+  user_email: string | null;
+  actual_cost_usd: number;
+  projected_monthly_cost_usd: number;
+  total_tokens: number;
+  llm_calls: number;
+  agent_runs: number;
+  avg_cost_per_run_usd: number | null;
+  last_used_at: string;
+};
+
+export type UserMonthlyCostReport = {
+  range: {
+    start: string;
+    end: string;
+  };
+  projection_basis: string;
+  projection_multiplier: number;
+  total_projected_monthly_cost_usd: number;
+  average_projected_monthly_cost_per_user_usd: number;
+  users: UserMonthlyCostReportItem[];
+};
+
 export type CostUsageEvent = {
   id: number;
   occurred_at: string;

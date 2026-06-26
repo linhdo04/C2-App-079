@@ -6,6 +6,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
+from langfuse import Langfuse
+
 from core.config import settings
 
 
@@ -20,7 +22,7 @@ _current_trace_context: ContextVar[AgentTraceContext | None] = ContextVar(
     "agent_trace_context",
     default=None,
 )
-_langfuse_client: Any | None = None
+_langfuse_client: Langfuse | None = None
 
 
 def langfuse_enabled() -> bool:
@@ -31,7 +33,7 @@ def langfuse_enabled() -> bool:
     )
 
 
-def _get_langfuse_client() -> Any:
+def _get_langfuse_client() -> Langfuse:
     global _langfuse_client
     if _langfuse_client is None:
         from langfuse import Langfuse

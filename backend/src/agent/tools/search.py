@@ -67,6 +67,10 @@ class SearchResultFilter:
         self._backoff_seconds = backoff_seconds
 
     async def filter(self, data: SearchFilterInput) -> SearchFilterDecision:
+        schema = json.dumps(
+            SearchFilterDecision.model_json_schema(),
+            ensure_ascii=False,
+        )
         messages = [
             {
                 "role": "system",
@@ -74,11 +78,15 @@ class SearchResultFilter:
                     "You filter web search results before they enter ReAct memory. "
                     "Use only the provided title, URL, and snippet. Do not answer "
                     "the user. Do not invent URLs, titles, sources, numbers, or "
-                    "facts. Put short source-grounded claims in usable_claims, each "
-                    "with the exact source_url from the same result. Reject results "
-                    "that do not help answer the question. Return valid JSON "
-                    "only. Do not wrap in markdown. Match the "
-                    "SearchFilterDecision schema exactly."
+                    "facts. Return only a JSON object matching the "
+                    "SearchFilterDecision schema. Set coverage to sufficient, "
+                    "partial, or insufficient. Put useful results in "
+                    "relevant_results with title, url, summary, relevance_reason, "
+                    "and optional nested usable_claims whose source_url exactly "
+                    "matches that result url. Put irrelevant results in "
+                    "rejected_results with title, url, and reason. Return valid "
+                    "JSON only. Do not wrap in markdown.\n\n"
+                    f"SearchFilterDecision JSON schema:\n{schema}"
                 ),
             },
             {
