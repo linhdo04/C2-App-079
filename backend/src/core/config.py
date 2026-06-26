@@ -19,12 +19,14 @@ class Settings(BaseSettings):
     llm_provider: str = Field(alias="LLM_PROVIDER", default="deepseek")
     default_model: str = Field(alias="DEFAULT_MODEL", default="deepseek-v4-flash")
     tavily_api_key: str = Field(alias="TAVILY_API_KEY")
-    langfuse_public_key: str | None = Field(alias="LANGFUSE_PUBLIC_KEY", default=None)
-    langfuse_secret_key: str | None = Field(alias="LANGFUSE_SECRET_KEY", default=None)
-    langfuse_base_url: str | None = Field(alias="LANGFUSE_BASE_URL", default=None)
-    langfuse_tracing_enabled: bool = Field(
-        alias="LANGFUSE_TRACING_ENABLED", default=True
+    langsmith_api_key: str | None = Field(alias="LANGSMITH_API_KEY", default=None)
+    langsmith_endpoint: str | None = Field(alias="LANGSMITH_ENDPOINT", default=None)
+    langsmith_tracing: bool = Field(alias="LANGSMITH_TRACING", default=True)
+    langsmith_project: str | None = Field(alias="LANGSMITH_PROJECT", default=None)
+    langsmith_workspace_id: str | None = Field(
+        alias="LANGSMITH_WORKSPACE_ID", default=None
     )
+
     agent_tool_timeout_seconds: float = Field(
         alias="AGENT_TOOL_TIMEOUT_SECONDS", default=15.0, gt=0
     )
