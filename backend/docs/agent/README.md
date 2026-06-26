@@ -62,11 +62,11 @@ Checkpoint tables thuộc official LangGraph saver và được setup tự độ
 
 ## Tracing
 
-Agent tracing dùng Langfuse khi `LANGFUSE_PUBLIC_KEY` và
-`LANGFUSE_SECRET_KEY` được cấu hình. Mỗi agent run tạo một trace `agent-run`;
-LangChain/DeepSeek calls được gửi qua Langfuse callback để giữ model, token usage
-và generation metadata. Chat routes truyền `chat_id` làm `session_id` để nhóm
-multi-turn conversations trong Langfuse Sessions view.
+Agent tracing dùng LangSmith khi `LANGSMITH_API_KEY` được cấu hình và
+`LANGSMITH_TRACING=True`. Mỗi agent run tạo một root run `agent-run`;
+LangChain/DeepSeek calls nhận `run_name`, tags và metadata qua RunnableConfig để
+LangSmith giữ model, token usage và generation metadata. Chat routes truyền
+`chat_id` làm `session_id` trong metadata để nhóm multi-turn conversations.
 
 Cost Management lưu local từng LLM usage event và metric tổng hợp cho mỗi
 agent run (`agent_run_metrics`) theo `run_id`, gồm latency, iterations,
@@ -118,10 +118,11 @@ này cần thêm lớp after-agent semantic safety check.
 ## Cấu hình
 
 ```text
-LANGFUSE_PUBLIC_KEY=
-LANGFUSE_SECRET_KEY=
-LANGFUSE_BASE_URL=https://cloud.langfuse.com
-LANGFUSE_TRACING_ENABLED=True
+LANGSMITH_API_KEY=
+LANGSMITH_ENDPOINT=https://api.smith.langchain.com
+LANGSMITH_TRACING=True
+LANGSMITH_PROJECT=
+LANGSMITH_WORKSPACE_ID=
 DEEPSEEK_API_KEY=
 DEEPSEEK_API_BASE=https://api.deepseek.com
 LLM_PROVIDER=deepseek
@@ -153,6 +154,16 @@ Management hiện có bảng giá tự động cho DeepSeek theo model
 `deepseek-reasoner`. Nếu model/provider chưa có trong registry thì Cost
 Management vẫn ghi nhận token nhưng chi phí USD sẽ là `0` cho đến khi bổ sung
 bảng giá tương ứng.
+
+Prompt mặc định có thể được bootstrap lên LangSmith bằng:
+
+```bash
+make agent-prompts-sync
+```
+
+Script sync `system_prompt`, `react_prompt`, và `tool_policy_prompt` từ local
+fallback hiện tại. Dùng `make agent-prompts-sync args="--dry-run"` để kiểm tra
+tên prompt trước khi push.
 
 ## Mở rộng
 

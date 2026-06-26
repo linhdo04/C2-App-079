@@ -199,7 +199,7 @@ limiting, rồi request logging trước khi tới router.
 inject `correlation_id` từ ContextVar nếu có.
 
 Module này cũng có logging helpers cho request/agent observability. Agent tracing
-runtime hiện tại đi qua Langfuse callbacks khi cấu hình Langfuse tồn tại.
+runtime hiện tại đi qua LangSmith khi cấu hình LangSmith tồn tại.
 
 ## Database and Persistence
 
