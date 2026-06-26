@@ -1,54 +1,65 @@
-"""Layered deterministic guardrails for agent input, tools, and output."""
+"""Layered guardrail pipeline for agent input, tool calls, and output."""
 
 from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
-from typing import Any, Literal
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any, Protocol
 
-GuardrailStage = Literal["input", "tool_input", "tool_output", "output"]
+import structlog
+from pydantic import BaseModel, Field
 
-SAFE_BLOCKED_RESPONSE = (
-    "Tôi không thể xử lý yêu cầu này vì nội dung có dấu hiệu không an toàn. "
-    "Vui lòng diễn đạt lại yêu cầu theo hướng hỗ trợ sản xuất nông nghiệp."
-)
+from .input_rails import PatternBlockGuardrail
+from .redaction import CreditCardMaskingGuardrail, EmailRedactionGuardrail
+from .risk import GuardrailRiskPattern, GuardrailRiskScore, GuardrailRiskScorer
+from .types import GuardrailContext, GuardrailDecision, GuardrailStage
+
+logger = structlog.get_logger(__name__)
 
 
-@dataclass(frozen=True)
-class GuardrailDecision:
-    content: str
-    blocked: bool = False
-    reason: str | None = None
+class GuardrailPIIRules(BaseModel):
+    email_pattern: str = Field(min_length=1)
+    credit_card_pattern: str = Field(min_length=1)
+
+
+class GuardrailRiskPatternRules(BaseModel):
+    name: str = Field(min_length=1)
+    weight: int = Field(ge=0, le=100)
+    pattern: str = Field(min_length=1)
+
+
+class GuardrailRiskRules(BaseModel):
+    llm_guardrail_threshold: int = Field(ge=0, le=100)
+    medium_threshold: int = Field(ge=0, le=100)
+    stage_weights: dict[GuardrailStage, int] = Field(default_factory=dict)
+    tool_weights: dict[str, int] = Field(default_factory=dict)
+    patterns: list[GuardrailRiskPatternRules] = Field(default_factory=list)
+
+
+class GuardrailRules(BaseModel):
+    blocked_response: str = Field(min_length=1)
+    pii: GuardrailPIIRules
+    secrets: list[str] = Field(min_length=1)
+    prompt_injection: list[str] = Field(min_length=1)
+    risk: GuardrailRiskRules
+
+
+class Guardrail(Protocol):
+    """Middleware-like guardrail applied at one or more agent stages."""
+
+    def apply(self, content: str, context: GuardrailContext) -> GuardrailDecision: ...
 
 
 class GuardrailPipeline:
-    """Fast deterministic guardrails inspired by LangChain middleware layers."""
+    """Composable guardrails inspired by LangChain agent middleware hooks.
 
-    _EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
-    _CREDIT_CARD_RE = re.compile(r"(?<!\d)(?:\d[ -]?){13,19}(?!\d)")
-    _SECRET_PATTERNS = (
-        re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
-        re.compile(r"\btvly-[A-Za-z0-9_-]{16,}\b"),
-        re.compile(r"\bAIza[0-9A-Za-z_-]{20,}\b"),
-        re.compile(
-            r"\b(?:api[_-]?key|secret|token|password)\s*[:=]\s*['\"]?[^'\"\s]{8,}",
-            re.I,
-        ),
-    )
-    _PROMPT_INJECTION_PATTERNS = (
-        re.compile(r"\bignore (?:all )?(?:previous|above|system) instructions\b", re.I),
-        re.compile(
-            r"\bdisregard (?:all )?(?:previous|above|system) instructions\b", re.I
-        ),
-        re.compile(r"\breveal (?:the )?(?:system|developer) prompt\b", re.I),
-        re.compile(r"\bprint (?:the )?(?:system|developer) prompt\b", re.I),
-        re.compile(r"\bjailbreak\b", re.I),
-        re.compile(
-            r"bỏ qua (?:tất cả )?(?:hướng dẫn|chỉ dẫn) (?:trước|hệ thống)", re.I
-        ),
-        re.compile(r"tiết lộ (?:system prompt|developer prompt|prompt hệ thống)", re.I),
-    )
+    LangChain's docs recommend layered deterministic and model-based middleware
+    at before-agent, around-tool, and after-agent points. This project uses a
+    custom LangGraph loop, so the public API stays stable while this pipeline
+    mirrors those middleware checkpoints through explicit stage methods.
+    """
 
     def __init__(
         self,
@@ -57,95 +68,135 @@ class GuardrailPipeline:
         redact_pii: bool = True,
         block_secrets: bool = True,
         block_prompt_injection: bool = True,
+        rules_path: Path | None = None,
+        rails: Sequence[Guardrail] | None = None,
+        risk_scorer: GuardrailRiskScorer | None = None,
     ) -> None:
         self.enabled = enabled
-        self.redact_pii = redact_pii
-        self.block_secrets = block_secrets
-        self.block_prompt_injection = block_prompt_injection
+        self.rules_path = rules_path or Path(__file__).with_name("guardrail_rules.json")
+        raw = self._load_rules()
+        self.risk_scorer = risk_scorer or self._build_risk_scorer(raw.risk)
+        self.rails = (
+            tuple(rails)
+            if rails is not None
+            else tuple(
+                self._build_default_rails(
+                    raw,
+                    redact_pii=redact_pii,
+                    block_secrets=block_secrets,
+                    block_prompt_injection=block_prompt_injection,
+                )
+            )
+        )
 
     def check_input(self, content: str) -> GuardrailDecision:
-        return self._check_text(content, stage="input")
+        return self._apply(content, GuardrailContext(stage="input"))
 
     def check_tool_input(self, tool: str, payload: dict[str, Any]) -> GuardrailDecision:
         serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-        return self._check_text(serialized, stage="tool_input", tool=tool)
+        return self._apply(serialized, GuardrailContext(stage="tool_input", tool=tool))
 
     def check_tool_output(self, tool: str, content: str) -> GuardrailDecision:
-        return self._check_text(content, stage="tool_output", tool=tool)
+        return self._apply(content, GuardrailContext(stage="tool_output", tool=tool))
 
     def check_output(self, content: str) -> GuardrailDecision:
-        return self._check_text(content, stage="output")
+        return self._apply(content, GuardrailContext(stage="output"))
 
-    def _check_text(
-        self,
-        content: str,
-        *,
-        stage: GuardrailStage,
-        tool: str | None = None,
-    ) -> GuardrailDecision:
+    def _apply(self, content: str, context: GuardrailContext) -> GuardrailDecision:
         if not self.enabled:
             return GuardrailDecision(content=content)
 
-        if self.block_secrets and self._contains_secret(content):
-            return GuardrailDecision(
-                content=SAFE_BLOCKED_RESPONSE,
-                blocked=True,
-                reason=f"{stage}:secret",
-            )
+        self._log_risk(self.risk_scorer.score(content, context), context)
 
-        if (
-            self.block_prompt_injection
-            and stage in {"input", "tool_output"}
-            and self._contains_prompt_injection(content)
-        ):
-            return GuardrailDecision(
-                content=SAFE_BLOCKED_RESPONSE,
-                blocked=True,
-                reason=f"{stage}:prompt_injection",
-            )
+        current = content
+        for rail in self.rails:
+            decision = rail.apply(current, context)
+            if decision.blocked:
+                return decision
+            current = decision.content
+        return GuardrailDecision(content=current)
 
-        if not self.redact_pii:
-            return GuardrailDecision(content=content)
-
-        sanitized = self._redact_email(content)
-        sanitized = self._mask_credit_cards(sanitized)
-        return GuardrailDecision(content=sanitized)
-
-    def _contains_secret(self, content: str) -> bool:
-        return any(pattern.search(content) for pattern in self._SECRET_PATTERNS)
-
-    def _contains_prompt_injection(self, content: str) -> bool:
-        return any(
-            pattern.search(content) for pattern in self._PROMPT_INJECTION_PATTERNS
+    def _load_rules(self) -> GuardrailRules:
+        return GuardrailRules.model_validate_json(
+            self.rules_path.read_text(encoding="utf-8")
         )
 
-    def _redact_email(self, content: str) -> str:
-        return self._EMAIL_RE.sub("[REDACTED_EMAIL]", content)
+    def _build_default_rails(
+        self,
+        raw: GuardrailRules,
+        *,
+        redact_pii: bool,
+        block_secrets: bool,
+        block_prompt_injection: bool,
+    ) -> list[Guardrail]:
+        rails: list[Guardrail] = []
+        blocked_response = raw.blocked_response
+        if block_secrets:
+            rails.append(
+                PatternBlockGuardrail(
+                    name="secret",
+                    patterns=_compile_patterns(raw.secrets),
+                    stages=frozenset(("input", "tool_input", "tool_output", "output")),
+                    blocked_response=blocked_response,
+                )
+            )
+        if block_prompt_injection:
+            rails.append(
+                PatternBlockGuardrail(
+                    name="prompt_injection",
+                    patterns=_compile_patterns(raw.prompt_injection),
+                    stages=frozenset(("input", "tool_output")),
+                    blocked_response=blocked_response,
+                )
+            )
+        if redact_pii:
+            pii = raw.pii
+            rails.extend(
+                (
+                    EmailRedactionGuardrail(
+                        re.compile(pii.email_pattern, re.IGNORECASE)
+                    ),
+                    CreditCardMaskingGuardrail(re.compile(pii.credit_card_pattern)),
+                )
+            )
+        return rails
 
-    def _mask_credit_cards(self, content: str) -> str:
-        def replace(match: re.Match[str]) -> str:
-            candidate = match.group(0)
-            digits = re.sub(r"\D", "", candidate)
-            if not self._valid_luhn(digits):
-                return candidate
-            return f"[MASKED_CREDIT_CARD_****{digits[-4:]}]"
+    def _build_risk_scorer(self, raw: GuardrailRiskRules) -> GuardrailRiskScorer:
+        return GuardrailRiskScorer(
+            llm_guardrail_threshold=raw.llm_guardrail_threshold,
+            medium_threshold=raw.medium_threshold,
+            stage_weights=raw.stage_weights,
+            tool_weights=raw.tool_weights,
+            patterns=tuple(
+                GuardrailRiskPattern(
+                    name=pattern.name,
+                    pattern=re.compile(pattern.pattern, re.IGNORECASE),
+                    weight=pattern.weight,
+                )
+                for pattern in raw.patterns
+            ),
+        )
 
-        return self._CREDIT_CARD_RE.sub(replace, content)
+    def _log_risk(
+        self,
+        risk: GuardrailRiskScore,
+        context: GuardrailContext,
+    ) -> None:
+        if risk.score <= 0:
+            return
+        logger.info(
+            "agent_guardrail_risk_scored",
+            stage=context.stage,
+            tool=context.tool,
+            score=risk.score,
+            level=risk.level,
+            reasons=list(risk.reasons),
+            llm_guardrail_recommended=risk.llm_guardrail_recommended,
+        )
 
-    @staticmethod
-    def _valid_luhn(digits: str) -> bool:
-        if not 13 <= len(digits) <= 19:
-            return False
-        checksum = 0
-        parity = len(digits) % 2
-        for index, character in enumerate(digits):
-            value = int(character)
-            if index % 2 == parity:
-                value *= 2
-                if value > 9:
-                    value -= 9
-            checksum += value
-        return checksum % 10 == 0
+
+def _compile_patterns(patterns: Sequence[str]) -> tuple[re.Pattern[str], ...]:
+    return tuple(re.compile(pattern, re.IGNORECASE) for pattern in patterns)
 
 
 def build_default_guardrails(settings: Any) -> GuardrailPipeline:

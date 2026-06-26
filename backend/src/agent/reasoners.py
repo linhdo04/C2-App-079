@@ -836,18 +836,19 @@ def _format_search_fallback_answer(
             break
 
     bullets = []
-    for index, result in enumerate(unique_results, start=1):
+    for result in unique_results:
         snippet = _shorten(result.get("snippet", "").strip(), 260)
         title = result.get("title") or _source_label(result["url"])
+        citation = f"[{title}]({result['url']})"
         if snippet:
-            bullets.append(f"- {snippet} [{index}]({result['url']})")
+            bullets.append(f"- {snippet} {citation}")
         else:
-            bullets.append(f"- Có nguồn liên quan: {title} [{index}]({result['url']})")
+            bullets.append(f"- Có nguồn liên quan: {citation}")
 
     return "\n\n".join(
         [
-            "Tôi tìm thấy một số nguồn web liên quan. Các số trích dẫn trong "
-            "nội dung là đường dẫn nguồn để kiểm chứng.",
+            "Tôi tìm thấy một số nguồn web liên quan. Các tên nguồn trong "
+            "nội dung là đường dẫn để kiểm chứng.",
             "Thông tin nổi bật:\n" + "\n".join(bullets),
         ]
     )

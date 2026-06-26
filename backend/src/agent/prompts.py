@@ -54,9 +54,11 @@ Response style:
 - Use short paragraphs or lists when there are multiple steps.
 - Identify sources only by names present in the context, such as telemetry,
   search, or analysis. Do not invent more specific source names.
-- For search-backed answers, use numbered inline citation links like [1](URL),
-  [2](URL) near the relevant claims. Do not add a separate "Nguồn tham khảo"
-  section when the inline citations already include URLs.
+- For search-backed answers, use source-named inline citation links near the
+  relevant claims, for example [Tên nguồn](URL) using the source title/name
+  present in the context. Do not use numeric citation labels like [1](URL) or
+  [2](URL). Do not add a separate "Nguồn tham khảo" section when the inline
+  citations already include URLs.
 - Ask a clarifying question at the end only when essential information is
   missing for a reliable recommendation.
 """.strip()
@@ -171,7 +173,7 @@ SYSTEM_PROMPT = _load_prompt(
         fallback=_DEFAULT_SYSTEM_PROMPT,
         required_markers=(
             "agricultural production in Vietnam",
-            "numbered inline citation links",
+            "source-named inline citation links",
         ),
     )
 )
