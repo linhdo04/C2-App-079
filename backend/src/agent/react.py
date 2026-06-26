@@ -606,7 +606,7 @@ class AgentLoop:
             "run_id": run_id,
             "conversation": [
                 message.model_dump(mode="json")
-                for message in active_memory.conversation()
+                for message in self._sanitize_conversation(active_memory.conversation())
             ],
             "steps": [step.model_dump(mode="json") for step in active_memory.steps()],
             "calls": [],
@@ -1200,8 +1200,6 @@ class AgentLoop:
                         if not text:
                             continue
                         chunks.append(text)
-                        _write_stream_token(text)
-                        streamed_in_finalize = True
                     final_response = "".join(chunks)
                 except Exception:
                     if chunks:
@@ -1251,6 +1249,20 @@ class AgentLoop:
     @staticmethod
     def _route_after_execute(state: _AgentGraphState) -> str:
         return "finalize" if state["completed"] else "plan"
+
+    def _sanitize_conversation(
+        self, conversation: Sequence[ConversationMessage]
+    ) -> tuple[ConversationMessage, ...]:
+        if self.guardrails is None:
+            return tuple(conversation)
+
+        sanitized: list[ConversationMessage] = []
+        for message in conversation:
+            decision = self.guardrails.check_input(message.content)
+            sanitized.append(
+                ConversationMessage(role=message.role, content=decision.content)
+            )
+        return tuple(sanitized)
 
     @staticmethod
     def _thread_id(run_id: str, session_id: str | None) -> str:

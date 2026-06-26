@@ -96,14 +96,24 @@ tool execution:
 - Input guardrail chặn prompt-injection rõ ràng và secret/API key trước khi gọi
   reasoner.
 - PII guardrail redact email và mask credit card theo Luhn check trên input,
-  tool observation và final output.
+  chat history, tool observation và final output.
 - Tool guardrail validate payload đã qua Pydantic, chặn secret trong tool input
   và sanitize tool output trước khi đưa lại vào ReAct memory.
-- Output guardrail quét final answer lần cuối trước khi trả về HTTP/SSE.
+- Output guardrail quét final answer lần cuối trước khi trả về HTTP/SSE; với
+  streaming finalize, token được buffer và sanitize trước khi emit để tránh leak
+  nội dung raw qua SSE.
 
 Các guardrail không ghi raw nội dung vào log; log chỉ chứa stage, tool và lý do
 chặn cấp cao. Đây là implementation nội bộ tương đương best practice middleware
-của LangChain, phù hợp với ReAct loop riêng của project.
+của LangChain, phù hợp với ReAct loop riêng của project. Pipeline nằm ở
+`backend/src/agent/guardrails/pipeline.py`, các rail nhỏ nằm trong
+`input_rails.py` và `redaction.py`, còn pattern/message được cấu hình tại
+`guardrail_rules.json` để tránh nhúng regex hoặc response text trực tiếp vào
+runtime logic. Pipeline cũng tính deterministic risk score theo stage, tool và
+pattern rồi log metadata `agent_guardrail_risk_scored` không chứa raw content;
+điểm này chỉ dùng để quan sát khi nào nên bật LLM-based guardrail, chưa gọi LLM.
+`llm_rails.py` được giữ làm extension point cho guardrail model-based nếu sau
+này cần thêm lớp after-agent semantic safety check.
 
 ## Cấu hình
 

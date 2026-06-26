@@ -894,7 +894,8 @@ async def test_search_tool_filters_trace_regression_noise() -> None:
 
 
 def test_system_prompt_requires_search_source_links() -> None:
-    assert "numbered inline citation links" in SYSTEM_PROMPT
+    assert "source-named inline citation links" in SYSTEM_PROMPT
+    assert "Do not use numeric citation labels" in SYSTEM_PROMPT
     assert "Do not add a separate" in SYSTEM_PROMPT
 
 
@@ -1205,7 +1206,11 @@ async def test_llm_routed_fallback_formats_search_results_as_citations() -> None
     answer = await reasoner.finalize("Gợi ý chăm sóc hồ tiêu tại Gia Lai", memory)
 
     assert "Thông tin nổi bật" in answer
-    assert "[1](https://example.com/ho-tieu)" in answer
+    assert (
+        "[HƯỚNG DẪN QUY TRÌNH TRỒNG VÀ CHĂM SÓC CÂY HỒ TIÊU](https://example.com/ho-tieu)"
+        in answer
+    )
+    assert "[1](https://example.com/ho-tieu)" not in answer
     assert "Nguồn tham khảo" not in answer
     assert "Title:" not in answer
     assert "URL:" not in answer
