@@ -32,6 +32,7 @@ export function AgentQuestionPanel({ isLoading, messages, streamingStatus = "", 
     resolver: zodResolver(agentQuestionSchema),
   });
   const conversationRef = useRef<HTMLDivElement>(null);
+  const questionRef = useRef<HTMLTextAreaElement>(null);
   const [composerVersion, setComposerVersion] = useState(0);
   const questionField = register("question");
 
@@ -47,7 +48,6 @@ export function AgentQuestionPanel({ isLoading, messages, streamingStatus = "", 
 
   async function submit(values: AgentQuestionFormValues) {
     if (await onSubmit(values)) {
-      reset();
       setComposerVersion((version) => version + 1);
     }
   }
@@ -57,7 +57,11 @@ export function AgentQuestionPanel({ isLoading, messages, streamingStatus = "", 
       return;
     }
     event.preventDefault();
-    void handleSubmit(submit)();
+    if (!isLoading) {
+      void handleSubmit(submit)();
+      reset();
+      questionRef.current?.focus();
+    }
   }
 
   function handleComposerInput(event: FormEvent<HTMLTextAreaElement>) {
@@ -118,9 +122,13 @@ export function AgentQuestionPanel({ isLoading, messages, streamingStatus = "", 
               rows={1}
               aria-invalid={errors.question !== undefined}
               aria-describedby={errors.question !== undefined ? "question-error" : "composer-hint"}
-              disabled={isLoading}
+              // disabled={isLoading}
               onInput={handleComposerInput}
               onKeyDown={handleComposerKeyDown}
+              ref={(e) => {
+                questionField.ref(e);
+                questionRef.current = e;
+              }}
             />
             <button
               className="absolute right-1.5 bottom-1.5 grid size-10 place-items-center rounded-full bg-primary text-primary-foreground shadow-[0_8px_24px_rgb(185_243_74/0.18)] transition hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none disabled:bg-secondary disabled:text-muted-foreground disabled:shadow-none"

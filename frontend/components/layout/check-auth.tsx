@@ -50,7 +50,7 @@ export default function CheckAuth({ children }: { children: ReactNode }) {
       return;
     }
 
-    if (publicRouters.includes(pathname)) {
+    if (pathname === PublicRouter.Login) {
       router.replace(entryPath);
     }
   }, [currentUserQuery.data, isCheckingAuth, pathname, router, setAuthenticated, setUser]);
