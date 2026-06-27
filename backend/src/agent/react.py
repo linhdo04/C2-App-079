@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 from .agent_messages import load_agent_messages
 from .decision_guards import load_decision_guard_policy
 from .guardrails import GuardrailPipeline
+from .run_metrics import record_agent_run_metric
 from .tracing import (
     AgentTraceContext,
     agent_run_observation,
@@ -605,7 +606,7 @@ class AgentLoop:
             "run_id": run_id,
             "conversation": [
                 message.model_dump(mode="json")
-                for message in active_memory.conversation()
+                for message in self._sanitize_conversation(active_memory.conversation())
             ],
             "steps": [step.model_dump(mode="json") for step in active_memory.steps()],
             "calls": [],
@@ -743,6 +744,16 @@ class AgentLoop:
                         termination_reason=result.termination_reason,
                     ),
                 )
+                await record_agent_run_metric(
+                    run_id=run_id,
+                    user_id=user_id,
+                    session_id=session_id,
+                    duration_ms=duration_ms,
+                    iterations=result.iterations,
+                    success=result.done,
+                    termination_reason=result.termination_reason,
+                    streamed=False,
+                )
                 return result
         finally:
             reset_trace_context(trace_token)
@@ -862,6 +873,16 @@ class AgentLoop:
                         duration_ms=duration_ms,
                         termination_reason=result.termination_reason,
                     ),
+                )
+                await record_agent_run_metric(
+                    run_id=run_id,
+                    user_id=user_id,
+                    session_id=session_id,
+                    duration_ms=duration_ms,
+                    iterations=result.iterations,
+                    success=result.done,
+                    termination_reason=result.termination_reason,
+                    streamed=True,
                 )
                 yield {"event": "result", "result": result}
         finally:
@@ -1179,8 +1200,6 @@ class AgentLoop:
                         if not text:
                             continue
                         chunks.append(text)
-                        _write_stream_token(text)
-                        streamed_in_finalize = True
                     final_response = "".join(chunks)
                 except Exception:
                     if chunks:
@@ -1230,6 +1249,20 @@ class AgentLoop:
     @staticmethod
     def _route_after_execute(state: _AgentGraphState) -> str:
         return "finalize" if state["completed"] else "plan"
+
+    def _sanitize_conversation(
+        self, conversation: Sequence[ConversationMessage]
+    ) -> tuple[ConversationMessage, ...]:
+        if self.guardrails is None:
+            return tuple(conversation)
+
+        sanitized: list[ConversationMessage] = []
+        for message in conversation:
+            decision = self.guardrails.check_input(message.content)
+            sanitized.append(
+                ConversationMessage(role=message.role, content=decision.content)
+            )
+        return tuple(sanitized)
 
     @staticmethod
     def _thread_id(run_id: str, session_id: str | None) -> str:

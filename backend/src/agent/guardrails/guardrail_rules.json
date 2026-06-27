@@ -1,0 +1,65 @@
+{
+  "blocked_response": "Tôi không thể xử lý yêu cầu này vì nội dung có dấu hiệu không an toàn. Vui lòng diễn đạt lại yêu cầu theo hướng hỗ trợ sản xuất nông nghiệp.",
+  "pii": {
+    "email_pattern": "\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b",
+    "credit_card_pattern": "(?<!\\d)(?:\\d[ -]?){13,19}(?!\\d)"
+  },
+  "secrets": [
+    "\\bsk-[A-Za-z0-9_-]{16,}\\b",
+    "\\btvly-[A-Za-z0-9_-]{16,}\\b",
+    "\\bAIza[0-9A-Za-z_-]{20,}\\b",
+    "\\b(?:api[_-]?key|secret|token|password)\\s*[:=]\\s*['\\\"]?[^'\\\"\\s]{8,}"
+  ],
+  "prompt_injection": [
+    "\\bignore (?:all )?(?:previous|above|system) instructions\\b",
+    "\\bdisregard (?:all )?(?:previous|above|system) instructions\\b",
+    "\\breveal (?:the )?(?:system|developer) prompt\\b",
+    "\\bprint (?:the )?(?:system|developer) prompt\\b",
+    "\\bjailbreak\\b",
+    "bỏ qua (?:tất cả )?(?:hướng dẫn|chỉ dẫn) (?:trước|hệ thống)",
+    "tiết lộ (?:system prompt|developer prompt|prompt hệ thống)"
+  ],
+  "risk": {
+    "llm_guardrail_threshold": 70,
+    "medium_threshold": 35,
+    "stage_weights": {
+      "input": 10,
+      "tool_input": 20,
+      "tool_output": 35,
+      "output": 30
+    },
+    "tool_weights": {
+      "search": 35,
+      "analysis": 15,
+      "telemetry": 10,
+      "calculator": 0
+    },
+    "patterns": [
+      {
+        "name": "prompt_injection_marker",
+        "weight": 45,
+        "pattern": "\\b(?:ignore|disregard) (?:all )?(?:previous|above|system) instructions\\b|\\b(?:system|developer) prompt\\b|\\bjailbreak\\b|bỏ qua (?:tất cả )?(?:hướng dẫn|chỉ dẫn)"
+      },
+      {
+        "name": "external_url",
+        "weight": 15,
+        "pattern": "https?://[^\\s)]+"
+      },
+      {
+        "name": "credential_like",
+        "weight": 60,
+        "pattern": "\\b(?:api[_-]?key|secret|token|password)\\s*[:=]\\s*['\\\"]?[^'\\\"\\s]{8,}|\\b(?:sk-|tvly-|AIza)[A-Za-z0-9_-]{16,}"
+      },
+      {
+        "name": "dangerous_domain",
+        "weight": 50,
+        "pattern": "\\b(?:malware|exploit|phishing|credential theft|weapon|explosive)\\b|\\b(?:mã độc|lừa đảo|vũ khí|chất nổ)\\b"
+      },
+      {
+        "name": "uncertainty_marker",
+        "weight": 20,
+        "pattern": "\\b(?:not sure|uncertain|insufficient evidence)\\b|\\b(?:không chắc|thiếu dữ liệu|không đủ dữ liệu)\\b"
+      }
+    ]
+  }
+}

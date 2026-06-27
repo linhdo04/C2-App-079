@@ -16,10 +16,17 @@
     "Không có dữ liệu độ ẩm"
   ],
   "point_telemetry_query_kinds": ["temperature_at", "humidity_at"],
-  "tool_policy_skip_after_terminal_observation": {
-    "tool": "telemetry",
-    "action_input_key": "query_kinds"
-  },
+  "tool_policy_skip_after_terminal_observations": [
+    {
+      "tool": "telemetry",
+      "action_input_key": "query_kinds",
+      "skip_with_external_search_intent": false
+    },
+    {
+      "tool": "search",
+      "skip_with_external_search_intent": true
+    }
+  ],
   "rules": [
     {
       "name": "empty_internal_telemetry_blocks_implicit_search",

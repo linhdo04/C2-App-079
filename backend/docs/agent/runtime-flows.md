@@ -77,7 +77,8 @@ POST /agent/chats/{chat_id}/messages
 Đặc điểm:
 
 - History được nạp theo thứ tự thời gian sau khi lấy các message gần nhất.
-- `session_id` là `chat_id`, dùng cho tracing/Langfuse session grouping.
+- `session_id` là `chat_id`, dùng cho LangSmith metadata để nhóm multi-turn
+  conversations.
 - Chat chỉ được persist sau khi agent có final answer.
 
 ## Entrypoint chat stream
@@ -319,7 +320,9 @@ termination_reason = max_iterations
 
 ## Tracing và logging
 
-Mỗi run có `run_id`. Khi Langfuse được cấu hình, agent tạo trace `agent-run` và
-gửi LangChain/DeepSeek calls qua callback. Tool execution tạo span metadata cấp
-cao như `tool`, `iteration`, `attempt`; raw observation không được ghi vào span
-metadata để giảm rủi ro lộ dữ liệu nội bộ.
+Mỗi run có `run_id`. Khi LangSmith được cấu hình, agent tạo root run
+`agent-run`; LangChain/DeepSeek calls nhận `run_name`, tags và metadata qua
+RunnableConfig để LangSmith tracing ghi nhận model, token usage và generation
+metadata. Tool execution tạo span metadata cấp cao như `tool`, `iteration`,
+`attempt`; raw observation không được ghi vào span metadata để giảm rủi ro lộ dữ
+liệu nội bộ.

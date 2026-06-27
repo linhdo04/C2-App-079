@@ -35,7 +35,8 @@ class DecisionGuardRule:
 @dataclass(frozen=True)
 class ToolPolicySkipRule:
     tool: str
-    action_input_key: str
+    action_input_key: str | None = None
+    skip_with_external_search_intent: bool = False
 
 
 @dataclass(frozen=True)
@@ -45,7 +46,7 @@ class DecisionGuardPolicy:
     complete_date_patterns: tuple[re.Pattern[str], ...]
     telemetry_no_data_markers: tuple[str, ...]
     point_telemetry_query_kinds: frozenset[str]
-    tool_policy_skip_after_terminal_observation: ToolPolicySkipRule
+    tool_policy_skip_after_terminal_observations: tuple[ToolPolicySkipRule, ...]
     rules: tuple[DecisionGuardRule, ...]
 
     def evaluate(
@@ -67,18 +68,26 @@ class DecisionGuardPolicy:
         goal: str,
         memory: _MemoryLike,
     ) -> bool:
-        if self.has_explicit_external_search_intent(goal):
-            return False
         steps = memory.steps()
         if not steps:
             return False
         last_action = steps[-1].action
-        skip_rule = self.tool_policy_skip_after_terminal_observation
-        return (
-            last_action is not None
-            and last_action.tool == skip_rule.tool
-            and skip_rule.action_input_key in last_action.input
-        )
+        if last_action is None:
+            return False
+
+        has_external_intent = self.has_explicit_external_search_intent(goal)
+        for skip_rule in self.tool_policy_skip_after_terminal_observations:
+            if last_action.tool != skip_rule.tool:
+                continue
+            if has_external_intent and not skip_rule.skip_with_external_search_intent:
+                continue
+            if (
+                skip_rule.action_input_key is not None
+                and skip_rule.action_input_key not in last_action.input
+            ):
+                continue
+            return True
+        return False
 
     def has_explicit_external_search_intent(self, goal: str) -> bool:
         return any(
@@ -110,10 +119,10 @@ class DecisionGuardPolicy:
                 )
 
     def _has_empty_telemetry_observation(self, memory: _MemoryLike) -> bool:
-        telemetry_tool = self.tool_policy_skip_after_terminal_observation.tool
+        telemetry_skip_rule = self._tool_policy_skip_rule_with_input_key()
         return any(
             step.action is not None
-            and step.action.tool == telemetry_tool
+            and step.action.tool == telemetry_skip_rule.tool
             and any(
                 marker in step.observation for marker in self.telemetry_no_data_markers
             )
@@ -126,12 +135,20 @@ class DecisionGuardPolicy:
         ) and not any(pattern.search(goal) for pattern in self.complete_date_patterns)
 
     def _has_point_telemetry_query(self, action: _ActionLike) -> bool:
-        query_kinds = action.input.get(
-            self.tool_policy_skip_after_terminal_observation.action_input_key
-        )
+        telemetry_skip_rule = self._tool_policy_skip_rule_with_input_key()
+        action_input_key = telemetry_skip_rule.action_input_key
+        if action_input_key is None:
+            return False
+        query_kinds = action.input.get(action_input_key)
         return isinstance(query_kinds, list) and any(
             query_kind in self.point_telemetry_query_kinds for query_kind in query_kinds
         )
+
+    def _tool_policy_skip_rule_with_input_key(self) -> ToolPolicySkipRule:
+        for skip_rule in self.tool_policy_skip_after_terminal_observations:
+            if skip_rule.action_input_key is not None:
+                return skip_rule
+        raise ValueError("At least one tool policy skip rule must define input key")
 
 
 def load_decision_guard_policy(path: Path | None = None) -> DecisionGuardPolicy:
@@ -147,11 +164,10 @@ def load_decision_guard_policy(path: Path | None = None) -> DecisionGuardPolicy:
         complete_date_patterns=_compile_patterns(raw["complete_date_patterns"]),
         telemetry_no_data_markers=tuple(raw["telemetry_no_data_markers"]),
         point_telemetry_query_kinds=frozenset(raw["point_telemetry_query_kinds"]),
-        tool_policy_skip_after_terminal_observation=ToolPolicySkipRule(
-            tool=raw["tool_policy_skip_after_terminal_observation"]["tool"],
-            action_input_key=raw["tool_policy_skip_after_terminal_observation"][
-                "action_input_key"
-            ],
+        tool_policy_skip_after_terminal_observations=tuple(
+            _parse_tool_policy_skip_rules(
+                raw["tool_policy_skip_after_terminal_observations"]
+            )
         ),
         rules=tuple(_parse_rules(raw["rules"])),
     )
@@ -178,6 +194,21 @@ def _parse_rules(raw_rules: Sequence[dict[str, Any]]) -> list[DecisionGuardRule]
             )
         )
     return rules
+
+
+def _parse_tool_policy_skip_rules(
+    raw_rules: Sequence[dict[str, Any]],
+) -> list[ToolPolicySkipRule]:
+    return [
+        ToolPolicySkipRule(
+            tool=raw_rule["tool"],
+            action_input_key=raw_rule.get("action_input_key"),
+            skip_with_external_search_intent=bool(
+                raw_rule.get("skip_with_external_search_intent", False)
+            ),
+        )
+        for raw_rule in raw_rules
+    ]
 
 
 __all__ = [

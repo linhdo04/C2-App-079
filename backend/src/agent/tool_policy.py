@@ -187,13 +187,30 @@ class SemanticToolPolicy:
             )
             or "(no previous tool calls)"
         )
+        conversation = (
+            "\n".join(
+                f"{message.role}: {_shorten(message.content, 1_000)}"
+                for message in memory.conversation()
+            )
+            or "(no conversation history)"
+        )
+        previous_observations = (
+            "\n".join(
+                _format_previous_observation(index, step)
+                for index, step in enumerate(memory.steps(), start=1)
+                if step.action is not None
+            )
+            or "(no previous observations)"
+        )
         messages = [
             SystemMessage(content=TOOL_POLICY_PROMPT),
             HumanMessage(
                 content=(
                     f"User goal:\n{goal}\n\n"
+                    f"Recent conversation:\n{conversation}\n\n"
                     f"Available tools:\n{tool_catalog}\n\n"
-                    f"Previous tool calls:\n{previous_calls}"
+                    f"Previous tool calls:\n{previous_calls}\n\n"
+                    f"Previous observations:\n{previous_observations}"
                 )
             ),
         ]
@@ -232,6 +249,20 @@ def _parse_tool_policy_decision(response: Any) -> ToolPolicyDecision:
 def _format_previous_call(tool: str, input_data: dict[str, Any]) -> str:
     serialized_input = json.dumps(input_data, ensure_ascii=False, sort_keys=True)
     return f"- {tool}: {serialized_input}"
+
+
+def _format_previous_observation(index: int, step: Any) -> str:
+    action = step.action
+    if action is None:
+        return f"- Step {index}: no tool observation"
+    observation = _shorten(str(step.observation).replace("\n", " "), 1_500)
+    return f"- Step {index} {action.tool}: {observation}"
+
+
+def _shorten(value: str, max_length: int) -> str:
+    if len(value) <= max_length:
+        return value
+    return value[: max_length - 3].rstrip() + "..."
 
 
 def _tool_call_metadata(tool_call: ToolPolicyCall) -> dict[str, Any]:

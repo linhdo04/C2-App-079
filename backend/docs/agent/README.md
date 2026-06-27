@@ -62,11 +62,15 @@ Checkpoint tables thuộc official LangGraph saver và được setup tự độ
 
 ## Tracing
 
-Agent tracing dùng Langfuse khi `LANGFUSE_PUBLIC_KEY` và
-`LANGFUSE_SECRET_KEY` được cấu hình. Mỗi agent run tạo một trace `agent-run`;
-LangChain/DeepSeek calls được gửi qua Langfuse callback để giữ model, token usage
-và generation metadata. Chat routes truyền `chat_id` làm `session_id` để nhóm
-multi-turn conversations trong Langfuse Sessions view.
+Agent tracing dùng LangSmith khi `LANGSMITH_API_KEY` được cấu hình và
+`LANGSMITH_TRACING=True`. Mỗi agent run tạo một root run `agent-run`;
+LangChain/DeepSeek calls nhận `run_name`, tags và metadata qua RunnableConfig để
+LangSmith giữ model, token usage và generation metadata. Chat routes truyền
+`chat_id` làm `session_id` trong metadata để nhóm multi-turn conversations.
+
+Cost Management lưu local từng LLM usage event và metric tổng hợp cho mỗi
+agent run (`agent_run_metrics`) theo `run_id`, gồm latency, iterations,
+termination reason, success, streamed flag, tổng token và cost.
 
 Tool execution được bọc bằng span metadata cấp cao (`tool`, `iteration`,
 `attempt`) nhưng không ghi raw tool observation để giảm rủi ro lộ dữ liệu nội bộ.
@@ -78,6 +82,9 @@ Decision guards trước khi chạy tool được cấu hình bằng
 `DecisionGuardPolicy`. Các rule này xử lý những trường hợp điều phối có rủi ro
 như không thay thế telemetry nội bộ bằng web search khi user chưa yêu cầu nguồn
 bên ngoài, hoặc yêu cầu bổ sung ngày/tháng/năm khi query telemetry còn mơ hồ.
+File config cũng khai báo các điều kiện bỏ qua tool policy sau observation đã
+đủ dữ liệu để reasoner tổng hợp, ví dụ sau search hoặc telemetry point-query,
+nhằm tránh loop tiếp tục gọi tool khi không còn cần thu thập thêm bằng chứng.
 Graph runtime chỉ gọi policy evaluator, không nhúng trực tiếp regex, tool name
 hay response text vào node logic. Các message/status user-facing của agent được
 cấu hình ở `backend/src/agent/agent_messages.json` và được lookup qua
@@ -89,22 +96,33 @@ tool execution:
 - Input guardrail chặn prompt-injection rõ ràng và secret/API key trước khi gọi
   reasoner.
 - PII guardrail redact email và mask credit card theo Luhn check trên input,
-  tool observation và final output.
+  chat history, tool observation và final output.
 - Tool guardrail validate payload đã qua Pydantic, chặn secret trong tool input
   và sanitize tool output trước khi đưa lại vào ReAct memory.
-- Output guardrail quét final answer lần cuối trước khi trả về HTTP/SSE.
+- Output guardrail quét final answer lần cuối trước khi trả về HTTP/SSE; với
+  streaming finalize, token được buffer và sanitize trước khi emit để tránh leak
+  nội dung raw qua SSE.
 
 Các guardrail không ghi raw nội dung vào log; log chỉ chứa stage, tool và lý do
 chặn cấp cao. Đây là implementation nội bộ tương đương best practice middleware
-của LangChain, phù hợp với ReAct loop riêng của project.
+của LangChain, phù hợp với ReAct loop riêng của project. Pipeline nằm ở
+`backend/src/agent/guardrails/pipeline.py`, các rail nhỏ nằm trong
+`input_rails.py` và `redaction.py`, còn pattern/message được cấu hình tại
+`guardrail_rules.json` để tránh nhúng regex hoặc response text trực tiếp vào
+runtime logic. Pipeline cũng tính deterministic risk score theo stage, tool và
+pattern rồi log metadata `agent_guardrail_risk_scored` không chứa raw content;
+điểm này chỉ dùng để quan sát khi nào nên bật LLM-based guardrail, chưa gọi LLM.
+`llm_rails.py` được giữ làm extension point cho guardrail model-based nếu sau
+này cần thêm lớp after-agent semantic safety check.
 
 ## Cấu hình
 
 ```text
-LANGFUSE_PUBLIC_KEY=
-LANGFUSE_SECRET_KEY=
-LANGFUSE_BASE_URL=https://cloud.langfuse.com
-LANGFUSE_TRACING_ENABLED=True
+LANGSMITH_API_KEY=
+LANGSMITH_ENDPOINT=https://api.smith.langchain.com
+LANGSMITH_TRACING=True
+LANGSMITH_PROJECT=
+LANGSMITH_WORKSPACE_ID=
 DEEPSEEK_API_KEY=
 DEEPSEEK_API_BASE=https://api.deepseek.com
 LLM_PROVIDER=deepseek
@@ -136,6 +154,16 @@ Management hiện có bảng giá tự động cho DeepSeek theo model
 `deepseek-reasoner`. Nếu model/provider chưa có trong registry thì Cost
 Management vẫn ghi nhận token nhưng chi phí USD sẽ là `0` cho đến khi bổ sung
 bảng giá tương ứng.
+
+Prompt mặc định có thể được bootstrap lên LangSmith bằng:
+
+```bash
+make agent-prompts-sync
+```
+
+Script sync `system_prompt`, `react_prompt`, và `tool_policy_prompt` từ local
+fallback hiện tại. Dùng `make agent-prompts-sync args="--dry-run"` để kiểm tra
+tên prompt trước khi push.
 
 ## Mở rộng
 

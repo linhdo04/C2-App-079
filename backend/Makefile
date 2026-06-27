@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help run test lint lint-check format format-check typecheck check db-migrate db-upgrade db-downgrade db-seed
+.PHONY: help run test lint lint-check format format-check typecheck check db-migrate db-upgrade db-downgrade db-seed agent-prompts-sync
 
 help:
 	@echo ""
@@ -23,6 +23,8 @@ help:
 	@echo "  make db-upgrade        Apply all pending migrations"
 	@echo "  make db-downgrade      Roll back the latest migration"
 	@echo "  make db-seed           Seed demo user, mission, sensor and telemetry"
+	@echo "  make agent-prompts-sync args='--dry-run'"
+	@echo "                         Sync local agent prompts to LangSmith"
 	@echo ""
 
 install:
@@ -35,7 +37,7 @@ run:
 	uv run uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
 
 test:
-	uv run pytest
+	LANGSMITH_TRACING=false uv run pytest
 
 lint-check:
 	uv run ruff check .
@@ -69,3 +71,6 @@ db-downgrade:
 
 db-seed:
 	uv run python -m scripts.seed_demo
+
+sync-prompts:
+	uv run python -m scripts.sync_prompts $(args)

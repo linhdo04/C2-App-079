@@ -894,7 +894,8 @@ async def test_search_tool_filters_trace_regression_noise() -> None:
 
 
 def test_system_prompt_requires_search_source_links() -> None:
-    assert "numbered inline citation links" in SYSTEM_PROMPT
+    assert "source-named inline citation links" in SYSTEM_PROMPT
+    assert "Do not use numeric citation labels" in SYSTEM_PROMPT
     assert "Do not add a separate" in SYSTEM_PROMPT
 
 
@@ -1051,6 +1052,38 @@ def test_structured_parsers_accept_pydantic_dict_and_raw_content() -> None:
 
 
 @pytest.mark.asyncio
+async def test_search_result_filter_prompt_matches_decision_schema() -> None:
+    llm = FakePolicyLLM(
+        {
+            "coverage": "insufficient",
+            "relevant_results": [],
+            "rejected_results": [],
+        }
+    )
+    result_filter = SearchResultFilter(llm, timeout_seconds=1)
+
+    decision = await result_filter.filter(
+        SearchFilterInput(
+            question="dự báo thời tiết Hà Nội",
+            results=[
+                {
+                    "title": "Weather",
+                    "url": "https://example.com/weather",
+                    "content": "Rain tomorrow.",
+                }
+            ],
+        )
+    )
+
+    system_message = llm.messages[0]["content"]
+    assert decision.coverage == "insufficient"
+    assert "coverage" in system_message
+    assert "relevant_results" in system_message
+    assert "rejected_results" in system_message
+    assert "Put short source-grounded claims in usable_claims" not in system_message
+
+
+@pytest.mark.asyncio
 async def test_llm_reasoner_retries_retryable_llm_errors() -> None:
     class FakeBoundLLM:
         def __init__(self) -> None:
@@ -1173,7 +1206,11 @@ async def test_llm_routed_fallback_formats_search_results_as_citations() -> None
     answer = await reasoner.finalize("Gợi ý chăm sóc hồ tiêu tại Gia Lai", memory)
 
     assert "Thông tin nổi bật" in answer
-    assert "[1](https://example.com/ho-tieu)" in answer
+    assert (
+        "[HƯỚNG DẪN QUY TRÌNH TRỒNG VÀ CHĂM SÓC CÂY HỒ TIÊU](https://example.com/ho-tieu)"
+        in answer
+    )
+    assert "[1](https://example.com/ho-tieu)" not in answer
     assert "Nguồn tham khảo" not in answer
     assert "Title:" not in answer
     assert "URL:" not in answer
@@ -1326,6 +1363,48 @@ async def test_semantic_tool_policy_uses_user_telemetry_before_search() -> None:
 
     assert decision == Action(tool="telemetry", input={"limit": 50})
     assert llm.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_semantic_tool_policy_receives_conversation_and_observations() -> None:
+    async def handler(tool_input: Any, context: Any) -> str:
+        return "unused"
+
+    search_tool = CallableTool(
+        "search",
+        "Search web",
+        handler,
+        input_model=SearchInput,
+    )
+    memory = InMemoryMemory(
+        [
+            ConversationMessage(
+                role="user",
+                content="Dự báo thời tiết ngày mai cho ruộng tôi",
+            ),
+            ConversationMessage(
+                role="assistant",
+                content="Bạn vui lòng cung cấp tỉnh/thành phố của ruộng.",
+            ),
+        ]
+    )
+    memory.add(
+        ReActStep(
+            thought="Use forecast search.",
+            action=Action(tool="search", input={"query": "dự báo thời tiết Hà Nội"}),
+            observation="Hà Nội ngày mai có mưa rào về tối.",
+        )
+    )
+    llm = FakePolicyLLM({"actions": [], "rationale": "Evidence is sufficient."})
+    policy = SemanticToolPolicy(llm, timeout_seconds=1)
+
+    await policy.decide("hà nội", memory, (search_tool,))
+
+    human_message = llm.messages[1].content
+    assert "Recent conversation:" in human_message
+    assert "Dự báo thời tiết ngày mai cho ruộng tôi" in human_message
+    assert "Previous observations:" in human_message
+    assert "Hà Nội ngày mai có mưa rào về tối." in human_message
 
 
 @pytest.mark.asyncio

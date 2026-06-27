@@ -55,6 +55,51 @@ class LLMUsageEventModel(BaseModel, table=True):
     )
 
 
+class AgentRunMetricModel(BaseModel, table=True):
+    __tablename__ = "agent_run_metrics"
+    __table_args__ = (
+        CheckConstraint("duration_ms >= 0", name="ck_agent_run_duration_ms"),
+        CheckConstraint("iterations >= 0", name="ck_agent_run_iterations"),
+        CheckConstraint("llm_call_count >= 0", name="ck_agent_run_llm_call_count"),
+        CheckConstraint("total_tokens >= 0", name="ck_agent_run_total_tokens"),
+        CheckConstraint("cost_usd >= 0", name="ck_agent_run_cost_usd"),
+        Index("ix_agent_run_metrics_run_id", "run_id", unique=True),
+        Index("ix_agent_run_metrics_occurred_at", "occurred_at"),
+        Index("ix_agent_run_metrics_user_occurred_at", "user_id", "occurred_at"),
+        Index(
+            "ix_agent_run_metrics_active_occurred_at",
+            "occurred_at",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
+
+    run_id: str = Field(max_length=64, nullable=False)
+    user_id: int | None = Field(
+        default=None,
+        foreign_key="users.id",
+        nullable=True,
+        index=True,
+    )
+    chat_session_id: int | None = Field(
+        default=None,
+        foreign_key="chat_sessions.id",
+        nullable=True,
+        index=True,
+    )
+    duration_ms: float = Field(default=0, ge=0, nullable=False)
+    iterations: int = Field(default=0, ge=0, nullable=False)
+    success: bool = Field(default=False, nullable=False)
+    termination_reason: str = Field(max_length=64, nullable=False)
+    streamed: bool = Field(default=False, nullable=False)
+    llm_call_count: int = Field(default=0, ge=0, nullable=False)
+    total_tokens: int = Field(default=0, ge=0, nullable=False)
+    cost_usd: float = Field(default=0, ge=0, nullable=False)
+    occurred_at: datetime = Field(
+        default_factory=get_utc_now,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+
 class CostBudgetModel(BaseModel, table=True):
     __tablename__ = "cost_budgets"
     __table_args__ = (
