@@ -3,7 +3,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ArrowUp } from "lucide-react";
 import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
-import { useForm } from "react-hook-form";
+import { useController, useForm } from "react-hook-form";
 import { FieldError } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/spinner";
 import { agentQuestionSchema, type AgentQuestionFormValues } from "@/lib/validation";
@@ -22,14 +22,15 @@ type AgentQuestionPanelProps = {
 
 export function AgentQuestionPanel({ isLoading, messages, streamingStatus = "", onSubmit }: AgentQuestionPanelProps) {
   const {
+    control,
     formState: { errors },
     handleSubmit,
     reset,
-    setValue,
   } = useForm<AgentQuestionFormValues>({
     defaultValues: { question: "" },
     resolver: zodResolver(agentQuestionSchema),
   });
+  const { field: questionField } = useController({ control, name: "question" });
   const conversationRef = useRef<HTMLDivElement>(null);
   const questionRef = useRef<HTMLDivElement>(null);
   const [composerVersion, setComposerVersion] = useState(0);
@@ -73,11 +74,11 @@ export function AgentQuestionPanel({ isLoading, messages, streamingStatus = "", 
     const composer = event.currentTarget;
     const question = composer.innerText;
     setIsComposerEmpty(question.length === 0);
-    setValue("question", question, { shouldDirty: true, shouldValidate: errors.question !== undefined });
+    questionField.onChange(question);
   }
 
   function handleSuggestionSelect(text: string) {
-    setValue("question", text, { shouldDirty: true, shouldValidate: true });
+    questionField.onChange(text);
     setIsComposerEmpty(false);
     if (questionRef.current !== null) {
       const composer = questionRef.current;
@@ -146,10 +147,13 @@ export function AgentQuestionPanel({ isLoading, messages, streamingStatus = "", 
             )}
             <div
               key={composerVersion}
-              ref={questionRef}
+              ref={(element) => {
+                questionField.ref(element);
+                questionRef.current = element;
+              }}
               id="question"
               className="block max-h-36 min-h-12 w-full overflow-y-auto bg-transparent px-4 pt-3 pr-14 pb-2.5 text-sm leading-6 whitespace-pre-wrap text-foreground outline-none"
-              contentEditable
+              contentEditable="plaintext-only"
               suppressContentEditableWarning
               inputMode="text"
               autoCorrect="on"
@@ -162,6 +166,7 @@ export function AgentQuestionPanel({ isLoading, messages, streamingStatus = "", 
               aria-invalid={errors.question !== undefined}
               aria-describedby={errors.question !== undefined ? "question-error" : "composer-hint"}
               data-virtualkeyboard="true"
+              onBlur={questionField.onBlur}
               onInput={handleComposerInput}
               onKeyDown={handleComposerKeyDown}
             />
