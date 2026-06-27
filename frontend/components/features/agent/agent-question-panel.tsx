@@ -24,7 +24,6 @@ export function AgentQuestionPanel({ isLoading, messages, streamingStatus = "", 
   const {
     formState: { errors },
     handleSubmit,
-    register,
     reset,
     setValue,
   } = useForm<AgentQuestionFormValues>({
@@ -32,9 +31,9 @@ export function AgentQuestionPanel({ isLoading, messages, streamingStatus = "", 
     resolver: zodResolver(agentQuestionSchema),
   });
   const conversationRef = useRef<HTMLDivElement>(null);
-  const questionRef = useRef<HTMLTextAreaElement>(null);
+  const questionRef = useRef<HTMLDivElement>(null);
   const [composerVersion, setComposerVersion] = useState(0);
-  const questionField = register("question");
+  const [isComposerEmpty, setIsComposerEmpty] = useState(true);
 
   useEffect(() => {
     const conversation = conversationRef.current;
@@ -46,28 +45,52 @@ export function AgentQuestionPanel({ isLoading, messages, streamingStatus = "", 
     }
   }, [messages, streamingStatus]);
 
-  async function submit(values: AgentQuestionFormValues) {
-    if (await onSubmit(values)) {
-      setComposerVersion((version) => version + 1);
+  useEffect(() => {
+    if (composerVersion > 0) {
+      questionRef.current?.focus();
     }
+  }, [composerVersion]);
+
+  async function submit(values: AgentQuestionFormValues) {
+    const submission = onSubmit(values);
+    reset();
+    setIsComposerEmpty(true);
+    setComposerVersion((version) => version + 1);
+    await submission;
   }
 
-  function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+  function handleComposerKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) {
       return;
     }
     event.preventDefault();
     if (!isLoading) {
       void handleSubmit(submit)();
-      reset();
-      questionRef.current?.focus();
     }
   }
 
-  function handleComposerInput(event: FormEvent<HTMLTextAreaElement>) {
+  function handleComposerInput(event: FormEvent<HTMLDivElement>) {
     const composer = event.currentTarget;
-    composer.style.height = "auto";
-    composer.style.height = `${Math.min(composer.scrollHeight, 192)}px`;
+    const question = composer.innerText;
+    setIsComposerEmpty(question.length === 0);
+    setValue("question", question, { shouldDirty: true, shouldValidate: errors.question !== undefined });
+  }
+
+  function handleSuggestionSelect(text: string) {
+    setValue("question", text, { shouldDirty: true, shouldValidate: true });
+    setIsComposerEmpty(false);
+    if (questionRef.current !== null) {
+      const composer = questionRef.current;
+      composer.textContent = text;
+      composer.focus();
+
+      const range = document.createRange();
+      range.selectNodeContents(composer);
+      range.collapse(false);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    }
   }
 
   return (
@@ -78,7 +101,7 @@ export function AgentQuestionPanel({ isLoading, messages, streamingStatus = "", 
         aria-live="polite"
       >
         {messages.length === 0 && !isLoading ? (
-          <EmptyConversation onSelect={(text) => setValue("question", text, { shouldValidate: true })} />
+          <EmptyConversation onSelect={handleSuggestionSelect} />
         ) : (
           <div className="mx-auto w-full max-w-3xl px-4 pt-5 pb-36">
             <div className="space-y-6">
@@ -113,22 +136,34 @@ export function AgentQuestionPanel({ isLoading, messages, streamingStatus = "", 
             >
               Nhắn tin cho AeroField
             </label>
-            <textarea
+            {isComposerEmpty && (
+              <span
+                className="pointer-events-none absolute top-3 left-4 text-sm leading-6 text-muted-foreground/75"
+                aria-hidden="true"
+              >
+                Nhắn tin cho AeroField
+              </span>
+            )}
+            <div
               key={composerVersion}
+              ref={questionRef}
               id="question"
-              {...questionField}
-              className="block max-h-36 min-h-12 w-full resize-none bg-transparent px-4 pt-3 pr-14 pb-2.5 text-sm leading-6 text-foreground outline-none placeholder:text-muted-foreground/75 disabled:cursor-not-allowed disabled:opacity-60"
-              placeholder="Nhắn tin cho AeroField"
-              rows={1}
+              className="block max-h-36 min-h-12 w-full overflow-y-auto bg-transparent px-4 pt-3 pr-14 pb-2.5 text-sm leading-6 whitespace-pre-wrap text-foreground outline-none"
+              contentEditable
+              suppressContentEditableWarning
+              inputMode="text"
+              autoCorrect="on"
+              autoCapitalize="sentences"
+              spellCheck
+              translate="no"
+              role="textbox"
+              aria-multiline="true"
+              aria-label="Nhắn tin cho AeroField"
               aria-invalid={errors.question !== undefined}
               aria-describedby={errors.question !== undefined ? "question-error" : "composer-hint"}
-              // disabled={isLoading}
+              data-virtualkeyboard="true"
               onInput={handleComposerInput}
               onKeyDown={handleComposerKeyDown}
-              ref={(e) => {
-                questionField.ref(e);
-                questionRef.current = e;
-              }}
             />
             <button
               className="absolute right-1.5 bottom-1.5 grid size-10 place-items-center rounded-full bg-primary text-primary-foreground shadow-[0_8px_24px_rgb(185_243_74/0.18)] transition hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none disabled:bg-secondary disabled:text-muted-foreground disabled:shadow-none"
