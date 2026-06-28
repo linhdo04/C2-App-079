@@ -1,0 +1,33 @@
+{
+  "image": {
+    "width": 9095,
+    "height": 9636
+  },
+  "planner": "hybrid",
+  "cells": 1491,
+  "sweep_lines": 1053,
+  "total_waypoints": 11395,
+  "total_dist_px": 488986.94,
+  "coverage": {
+    "background": {
+      "pixels": 15277895,
+      "percent": 17.43
+    },
+    "building": {
+      "pixels": 42658,
+      "percent": 0.05
+    },
+    "woodland": {
+      "pixels": 61835572,
+      "percent": 70.56
+    },
+    "water": {
+      "pixels": 9736397,
+      "percent": 11.11
+    },
+    "road": {
+      "pixels": 746898,
+      "percent": 0.85
+    }
+  }
+}

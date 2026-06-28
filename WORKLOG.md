@@ -2,6 +2,61 @@
 
 ---
 
+## 2026-06-22 — Hybrid BECD + RCPP coverage planner
+
+### Context
+BECD and RCPP were two **competing** planners — `--planner both` just ran each
+independently and wrote separate outputs; they never interacted. Each lacked
+exactly what the other had:
+- **RCPP** picked an optimal sweep angle (rotating calipers / `cv2.minAreaRect`)
+  to minimise U-turns, but did **not** decompose around internal obstacles.
+- **BECD** decomposed cleanly around obstacles (split/merge topology events) but
+  only swept **axis-aligned (vertical)** — never angle-optimal.
+
+Goal: make them work together so coverage is obstacle-aware *and* angle-optimal.
+
+### Changes made
+- **`path_planner.py`**:
+  - Added **`HybridPlanner`** — composes the two existing planners rather than
+    rewriting them. Uses `BECDPlanner._decompose` to cut the field into
+    obstacle-free cells, then for **each cell** runs
+    `RotatingCalipersPlanner._sweep_angle` + `._boustrophedon` to sweep at that
+    cell's own optimal angle. Cells are ordered greedily by nearest endpoint and
+    stitched with the existing `_line_free` / `_astar` transit routing.
+  - Added module-level **`_reverse_waypoints()`** — flips a cell's already
+    A*-stitched polyline while preserving per-edge `is_transit` semantics
+    (transit-ness is an edge property, symmetric under reversal), needed for the
+    greedy-ordering flip.
+  - CLI: added `hybrid` to `--planner`, made it the **default**.
+- **`inference.py`**: imported `HybridPlanner`; added `hybrid` and `all`
+  (rcpp+becd+hybrid) planner choices; made `hybrid` the default; multi-planner
+  runs now suffix every output (`_hybrid`, etc.).
+- **`run_hybrid.py`** (new): standalone driver that runs the hybrid straight from
+  a saved mask and writes the same artefact set inference produces
+  (`_path_hybrid.png`, enriched `_waypoints_hybrid.json`, `_mission_hybrid.json`).
+
+### Test run
+Ran the hybrid on `M-33-20-D-c-4-2` mask (9095x9636), saved to
+`results/M-33-20-D-c-4-2/`:
+- 1491 cells, 1053 sweep lines, 11,395 waypoints
+- A* rerouted 289/612 inter-cell transitions + 196 intra-cell sweep gaps
+
+Total path distance vs the other planners on the **same** field (shortest wins):
+
+| Planner | Waypoints | Total distance (px) |
+|---------|----------:|--------------------:|
+| RCPP    |     2,474 |           1,252,720 |
+| BECD    |    10,855 |             528,979 |
+| Hybrid  |    11,395 |         **488,987** |
+
+Hybrid is ~8% shorter than BECD and ~2.6x shorter than RCPP — the expected
+payoff of obstacle-aware decomposition **plus** per-cell optimal angle.
+
+### Status
+- Next (optional perf): the hybrid does a full-image `warpAffine` per cell, so
+  it's slow at full resolution (1491 cells on a 88 MP mask). Speed-up is to
+  rotate only each cell's bounding-box crop instead of the whole image.
+
 ## 2026-06-15 — Lovász-Softmax loss for road IoU, ignore training logs
 
 ### Context

@@ -35,7 +35,8 @@ try:
 except ImportError:
     SMP_AVAILABLE = False
 
-from path_planner import RotatingCalipersPlanner, BECDPlanner, FARMLAND, HARD_OBSTACLES
+from path_planner import (
+    RotatingCalipersPlanner, BECDPlanner, HybridPlanner, FARMLAND, HARD_OBSTACLES)
 
 
 # ── Constants — must match train.py ───────────────────────────────────────────
@@ -267,14 +268,22 @@ def run_single(
     if not plan:
         return
 
-    planners_to_run = (
-        ["rcpp", "becd"] if planner_name == "both" else [planner_name]
-    )
+    if planner_name == "all":
+        planners_to_run = ["rcpp", "becd", "hybrid"]
+    elif planner_name == "both":
+        planners_to_run = ["rcpp", "becd"]
+    else:
+        planners_to_run = [planner_name]
+
+    multi = len(planners_to_run) > 1
 
     for pname in planners_to_run:
         if pname == "becd":
             planner = BECDPlanner(swath, overlap, safety)
             tag     = "BECD"
+        elif pname == "hybrid":
+            planner = HybridPlanner(swath, overlap, safety)
+            tag     = "HYBRID"
         else:
             planner = RotatingCalipersPlanner(swath, overlap, safety)
             tag     = "RCPP"
@@ -288,7 +297,7 @@ def run_single(
         print(f"[INF] Cells / sweeps      : {n_sweeps}")
         print(f"[INF] Total waypoints     : {len(waypoints)}")
 
-        suffix      = f"_{pname}" if planner_name == "both" else ""
+        suffix      = f"_{pname}" if multi else ""
         path_img    = out_dir / f"{stem}_path{suffix}.png"
         wp_path     = out_dir / f"{stem}_waypoints{suffix}.json"
         mission_path = out_dir / f"{stem}_mission{suffix}.json"
@@ -320,8 +329,11 @@ def _parse_args():
                    help="Output directory  (default: results/)")
     p.add_argument("--plan",       action="store_true",
                    help="Run path planner after segmentation")
-    p.add_argument("--planner",   choices=["rcpp", "becd", "both"], default="rcpp",
-                   help="Which planner to run: rcpp, becd, or both (default: rcpp)")
+    p.add_argument("--planner",   choices=["rcpp", "becd", "hybrid", "both", "all"],
+                   default="hybrid",
+                   help="Which planner to run: rcpp, becd, hybrid (BECD cells + "
+                        "RCPP per-cell angle), both (rcpp+becd), or all "
+                        "(default: hybrid)")
 
     # Inference tuning
     p.add_argument("--tile",   type=int, default=TILE_SIZE,

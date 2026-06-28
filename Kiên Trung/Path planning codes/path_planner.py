@@ -3,7 +3,7 @@ Coverage Path Planners — RCPP and BECD
 ========================================
 Phase 2: Coverage path planning over segmented farmland.
 
-Two planners are provided for comparison:
+Three planners are provided:
 
   RotatingCalipersPlanner (RCPP)
     mask → farmland polygon → rotating calipers min-bbox → optimal sweep
@@ -14,6 +14,11 @@ Two planners are provided for comparison:
     mask → column sweep → topology events (splits / merges) → cell
     decomposition → vertical boustrophedon per cell → greedy cell ordering.
     Best for: complex fields with many internal obstacles.
+
+  HybridPlanner (BECD + RCPP working together)  ← recommended default
+    BECD decomposes the field into obstacle-free cells, then RCPP picks each
+    cell's own optimal sweep angle and sweeps it; cells are A*-stitched.
+    Obstacle-aware (BECD) AND angle-optimal (RCPP) at once.
 
 Class IDs (match train.py CLASS_NAMES):
     0 = background / farmland  ← coverage target
@@ -723,7 +728,210 @@ class BECDPlanner:
         return [Waypoint(x, y, s, t) for x, y, s, t in all_pts]
 
 
+# ── Hybrid BECD + RCPP ──────────────────────────────────────────────────────────
+
+class HybridPlanner:
+    """
+    Hybrid coverage planner that makes BECD and RCPP work together.
+
+    Pipeline:
+      1. BECD decomposes the traversable region into obstacle-free cells
+         (split / merge topology events) — handles internal obstacles.
+      2. For EACH cell, RCPP's rotating-calipers step picks that cell's own
+         optimal sweep angle, then sweeps an angled boustrophedon over it —
+         minimises U-turns per cell instead of forcing axis-aligned sweeps.
+      3. Cells are ordered greedily by nearest endpoint and stitched with the
+         same A* transit routing used by both base planners.
+
+    The result is obstacle-aware (from BECD) AND angle-optimal (from RCPP).
+    Internally it composes a BECDPlanner (for decomposition) and a
+    RotatingCalipersPlanner (for per-cell angle + sweep), so the two
+    algorithms share one code path rather than competing.
+
+    Args:
+        swath_width:   Camera footprint width in pixels.
+        overlap:       Fractional lateral overlap between adjacent sweeps.
+        safety_margin: Pixels to inflate obstacle boundaries.
+    """
+
+    def __init__(
+        self,
+        swath_width:   int   = 40,
+        overlap:       float = 0.20,
+        safety_margin: int   = 10,
+        astar_step:    int   = 8,
+    ):
+        self.swath_width   = swath_width
+        self.safety_margin = safety_margin
+        self.astar_step    = astar_step
+        # BECD provides decomposition; RCPP provides per-cell angle + sweep.
+        self._becd = BECDPlanner(swath_width, overlap, safety_margin, astar_step)
+        self._rcpp = RotatingCalipersPlanner(swath_width, overlap, safety_margin, astar_step)
+        self.step  = self._becd.step
+        self._cells: List[_Cell] = []
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def plan(self, mask: np.ndarray) -> List[Waypoint]:
+        obs  = self._becd._obstacle_mask(mask)
+        trav = ((mask == FARMLAND) & ~obs.astype(bool)).astype(np.uint8)
+        if not trav.any():
+            print("[HYBRID] No traversable area found.")
+            return []
+
+        cells = self._becd._decompose(trav)
+        self._cells = cells
+        print(f"[HYBRID] Decomposed into {len(cells)} cell(s).")
+
+        # Cover each cell at its own RCPP-optimal angle.
+        sweep_offset:  int = 0
+        cell_wps:      List[List[Waypoint]] = []
+        intra_astar:   int = 0
+        for cell in cells:
+            contour = self._cell_contour(cell, trav)
+            if contour is None or cv2.contourArea(contour) < 1.0:
+                continue
+            angle = self._rcpp._sweep_angle(contour)
+            wps, n_astar, _ = self._rcpp._boustrophedon(
+                contour, obs, angle, mask.shape[:2], sweep_offset)
+            if not wps:
+                continue
+            sweep_offset = wps[-1].sweep_idx + 1
+            intra_astar += n_astar
+            cell_wps.append(wps)
+
+        waypoints, inter_astar, n_inter = self._stitch(cell_wps, obs)
+        if n_inter:
+            print(f"[HYBRID] A* rerouted {inter_astar} / {n_inter} inter-cell transition(s).")
+        if intra_astar:
+            print(f"[HYBRID] A* rerouted {intra_astar} intra-cell sweep gap(s).")
+        return waypoints
+
+    def visualize(
+        self,
+        mask:      np.ndarray,
+        waypoints: List[Waypoint],
+        out_path:  str,
+    ) -> np.ndarray:
+        h, w   = mask.shape[:2]
+        canvas = np.zeros((h, w, 3), dtype=np.uint8)
+        for cls_id, colour in _COLOUR.items():
+            canvas[mask == cls_id] = colour
+
+        for cell in self._cells:
+            cv2.rectangle(
+                canvas,
+                (cell.x_left,  cell.y_top),
+                (cell.x_right, cell.y_bot),
+                (0, 220, 220), 1,
+            )
+
+        if waypoints:
+            pts = [(int(wp.x), int(wp.y)) for wp in waypoints]
+            for i, (a, b) in enumerate(zip(pts, pts[1:])):
+                colour = (0, 140, 255) if waypoints[i + 1].is_transit else (0, 255, 255)
+                cv2.line(canvas, a, b, colour, 1, cv2.LINE_AA)
+            for pt in pts:
+                cv2.circle(canvas, pt, 2, (0, 0, 255), -1)
+            cv2.circle(canvas, pts[0],  6, (0, 255, 0),   -1)
+            cv2.circle(canvas, pts[-1], 6, (255, 100, 0), -1)
+
+        cv2.imwrite(out_path, canvas)
+        print(f"[HYBRID] Visualisation saved → {out_path}")
+        return canvas
+
+    # ── Private ───────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _cell_contour(cell: _Cell, trav: np.ndarray) -> Optional[np.ndarray]:
+        """
+        Isolate a cell's traversable pixels (its bbox slice of `trav`) and
+        return their largest external contour, ready for rotating-calipers
+        angle estimation.  Returns None if the cell holds no pixels.
+        """
+        region = np.zeros_like(trav)
+        region[cell.y_top : cell.y_bot + 1, cell.x_left : cell.x_right + 1] = \
+            trav[cell.y_top : cell.y_bot + 1, cell.x_left : cell.x_right + 1]
+        contours, _ = cv2.findContours(
+            region, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return None
+        return max(contours, key=cv2.contourArea)
+
+    def _stitch(
+        self,
+        cell_wps: List[List[Waypoint]],
+        obs:      np.ndarray,
+    ) -> Tuple[List[Waypoint], int, int]:
+        """
+        Greedy nearest-endpoint ordering of per-cell coverage polylines,
+        joined with A*-routed transits (mirrors BECDPlanner._cover_cells but
+        operates on pre-built Waypoint lists rather than raw sweep tuples).
+
+        Returns (waypoints, n_astar_reroutes, n_inter_cell_transitions).
+        """
+        non_empty = [w for w in cell_wps if w]
+        if not non_empty:
+            return [], 0, 0
+
+        ordered   = [non_empty[0]]
+        remaining = list(non_empty[1:])
+        while remaining:
+            lx, ly = ordered[-1][-1].x, ordered[-1][-1].y
+            best_j, best_d, flip = 0, float("inf"), False
+            for j, w in enumerate(remaining):
+                ds = np.hypot(w[0].x  - lx, w[0].y  - ly)
+                de = np.hypot(w[-1].x - lx, w[-1].y - ly)
+                if ds < best_d:
+                    best_d, best_j, flip = ds, j, False
+                if de < best_d:
+                    best_d, best_j, flip = de, j, True
+            nxt = remaining.pop(best_j)
+            ordered.append(_reverse_waypoints(nxt) if flip else nxt)
+
+        all_pts: List[Waypoint] = []
+        n_astar = 0
+        for i, w in enumerate(ordered):
+            if i == 0:
+                all_pts.extend(w)
+                continue
+
+            prev   = all_pts[-1]
+            target = w[0]
+            if _line_free((prev.x, prev.y), (target.x, target.y), obs):
+                all_pts.append(Waypoint(target.x, target.y, target.sweep_idx, True))
+            else:
+                path = _astar(
+                    (prev.x, prev.y), (target.x, target.y),
+                    obs, step=self.astar_step)
+                if path:
+                    n_astar += 1
+                    for tx, ty in path[1:]:
+                        all_pts.append(Waypoint(tx, ty, target.sweep_idx, True))
+                else:
+                    all_pts.append(Waypoint(target.x, target.y, target.sweep_idx, True))
+
+            all_pts.extend(w[1:])
+
+        return all_pts, n_astar, len(ordered) - 1
+
+
 # ── Utility ───────────────────────────────────────────────────────────────────
+
+def _reverse_waypoints(wps: List[Waypoint]) -> List[Waypoint]:
+    """
+    Reverse a coverage polyline while preserving per-edge transit semantics.
+
+    A waypoint's `is_transit` flag describes the edge ENTERING it, so a plain
+    reversal would misalign those flags.  Transit-ness is symmetric per edge,
+    so we re-map each edge's flag onto its new destination waypoint.
+    """
+    n   = len(wps)
+    out = [Waypoint(wp.x, wp.y, wp.sweep_idx, False) for wp in reversed(wps)]
+    for i in range(1, n):
+        out[i].is_transit = wps[n - i].is_transit
+    return out
+
 
 def _contiguous_segments(xs: np.ndarray) -> List[Tuple[int, int]]:
     """Split a sorted array of x-coords into (start, end) contiguous runs."""
@@ -747,8 +955,9 @@ def _parse_args():
         description="Coverage path planners: RCPP and BECD")
     p.add_argument("--mask",    required=True,
                    help="Grayscale PNG segmentation mask (class IDs 0-4)")
-    p.add_argument("--planner", choices=["rcpp", "becd"], default="rcpp",
-                   help="Path planner to use (default: rcpp)")
+    p.add_argument("--planner", choices=["rcpp", "becd", "hybrid"], default="hybrid",
+                   help="Path planner to use: rcpp, becd, or hybrid "
+                        "(BECD cells + RCPP per-cell angle; default: hybrid)")
     p.add_argument("--swath",   type=int,   default=40,
                    help="Swath width in pixels (default: 40)")
     p.add_argument("--overlap", type=float, default=0.20,
@@ -773,6 +982,10 @@ def main():
         planner   = BECDPlanner(args.swath, args.overlap, args.safety)
         waypoints = planner.plan(mask)
         tag = "BECD"
+    elif args.planner == "hybrid":
+        planner   = HybridPlanner(args.swath, args.overlap, args.safety)
+        waypoints = planner.plan(mask)
+        tag = "HYBRID"
     else:
         planner   = RotatingCalipersPlanner(args.swath, args.overlap, args.safety)
         waypoints = planner.plan(mask)
