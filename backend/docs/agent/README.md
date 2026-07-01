@@ -7,6 +7,7 @@ AI. Public HTTP response và SSE envelope không thay đổi.
 
 ```text
 goal + recent chat history
+-> deterministic fast path / lightweight intent router
 -> input guardrail
 -> LangGraph StateGraph:
    -> tool policy / DeepSeek reasoner
@@ -48,6 +49,12 @@ production.
 Chat routes tải tối đa `AGENT_MEMORY_MAX_MESSAGES` message gần nhất, giữ đúng
 thứ tự thời gian và giới hạn tổng ký tự bằng
 `AGENT_MEMORY_MAX_CHARACTERS`. `/agent/ask` không tải history.
+
+Trước khi vào LangGraph, facade áp dụng fast path deterministic cho các lượt
+chat chắc chắn như chào/cảm ơn/ack, sau đó dùng intent router LLM schema nhỏ
+để phân loại `direct_answer`, `clarify`, hoặc `full_agent`. Router không gọi
+tool, không search và dùng timeout riêng; các câu cần telemetry/search/analysis
+hoặc reasoning vẫn đi qua full LangGraph agent.
 
 `stream_agent()` phát safe routing/tool/synthesis status khi công việc thực sự
 diễn ra, sau đó phát final answer theo nhiều token event. Thought, observation
@@ -135,6 +142,9 @@ AGENT_LLM_TIMEOUT_SECONDS=20
 AGENT_LLM_MAX_RETRIES=1
 AGENT_LLM_RETRY_BACKOFF_SECONDS=0.5
 AGENT_FALLBACK_ROUTER_TIMEOUT_SECONDS=6
+AGENT_INTENT_ROUTER_ENABLED=True
+AGENT_INTENT_ROUTER_TIMEOUT_SECONDS=3
+AGENT_INTENT_ROUTER_MIN_CONFIDENCE=0.65
 AGENT_SEARCH_FILTER_ENABLED=True
 AGENT_SEARCH_FILTER_TIMEOUT_SECONDS=8
 AGENT_MEMORY_MAX_MESSAGES=10
@@ -161,9 +171,10 @@ Prompt mặc định có thể được bootstrap lên LangSmith bằng:
 make agent-prompts-sync
 ```
 
-Script sync `system_prompt`, `react_prompt`, và `tool_policy_prompt` từ local
-fallback hiện tại. Dùng `make agent-prompts-sync args="--dry-run"` để kiểm tra
-tên prompt trước khi push.
+Script sync `system_prompt`, `react_prompt`, `tool_policy_prompt`, và
+`intent_router_prompt` từ local fallback hiện tại. Dùng
+`make agent-prompts-sync args="--dry-run"` để kiểm tra tên prompt trước khi
+push.
 
 ## Mở rộng
 

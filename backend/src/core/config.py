@@ -46,6 +46,15 @@ class Settings(BaseSettings):
     agent_fallback_router_timeout_seconds: float = Field(
         alias="AGENT_FALLBACK_ROUTER_TIMEOUT_SECONDS", default=6.0, gt=0
     )
+    agent_intent_router_enabled: bool = Field(
+        alias="AGENT_INTENT_ROUTER_ENABLED", default=True
+    )
+    agent_intent_router_timeout_seconds: float = Field(
+        alias="AGENT_INTENT_ROUTER_TIMEOUT_SECONDS", default=3.0, gt=0
+    )
+    agent_intent_router_min_confidence: float = Field(
+        alias="AGENT_INTENT_ROUTER_MIN_CONFIDENCE", default=0.65, ge=0, le=1
+    )
     agent_max_iterations: int = Field(alias="AGENT_MAX_ITERATIONS", default=6, gt=0)
     agent_tool_max_retries: int = Field(alias="AGENT_TOOL_MAX_RETRIES", default=1, ge=0)
     agent_tool_retry_backoff_seconds: float = Field(
