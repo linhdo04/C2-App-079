@@ -532,18 +532,28 @@ async def test_telemetry_tool_queries_temperature_max_for_current_day_by_default
 ) -> None:
     from agent.react import ToolContext
 
-    row = (
-        TelemetryModel(
-            id=9,
-            iot_node_id=1,
-            timestamp=datetime(2026, 6, 23, 2, 0, tzinfo=UTC),
-            temperature_celsius=35.2,
-            humidity_percent=68,
-        ),
-        "Cảm biến 01",
-        "Ruộng lúa",
-    )
-    session = FakeTelemetrySession([[row]])
+    rows = [
+        (
+            TelemetryModel(
+                id=index,
+                iot_node_id=1,
+                timestamp=timestamp,
+                temperature_celsius=35.2,
+                humidity_percent=68,
+            ),
+            "Cảm biến 01",
+            "Ruộng lúa",
+        )
+        for index, timestamp in enumerate(
+            [
+                datetime(2026, 6, 23, 2, 0, tzinfo=UTC),
+                datetime(2026, 6, 23, 1, 30, tzinfo=UTC),
+                datetime(2026, 6, 23, 1, 0, tzinfo=UTC),
+            ],
+            start=9,
+        )
+    ]
+    session = FakeTelemetrySession([rows])
 
     @asynccontextmanager
     async def fake_db_session() -> Any:
@@ -567,13 +577,18 @@ async def test_telemetry_tool_queries_temperature_max_for_current_day_by_default
     assert "telemetry.timestamp >= " in statement_text
     assert "telemetry.timestamp < " in statement_text
     assert "telemetry.temperature_celsius DESC" in statement_text
+    assert "max(telemetry.temperature_celsius)" in statement_text
     assert "telemetry.timestamp DESC" in statement_text
     assert "telemetry.id DESC" in statement_text
+    assert statement._limit_clause.value == 51
     assert datetime(2026, 6, 22, 17, 0, tzinfo=UTC) in params.values()
     assert datetime(2026, 6, 23, 3, 0, tzinfo=UTC) in params.values()
     assert "Truy vấn telemetry theo chỉ số trong hôm nay" in result
     assert "Nhiệt độ cao nhất trong hôm nay: 35.2°C" in result
-    assert "thời điểm 09:00:00 ngày 23/06/2026 (giờ Việt Nam)" in result
+    assert "ghi nhận 3 lần" in result
+    assert "08:00:00 ngày 23/06/2026 (giờ Việt Nam)" in result
+    assert "08:30:00 ngày 23/06/2026 (giờ Việt Nam)" in result
+    assert "09:00:00 ngày 23/06/2026 (giờ Việt Nam)" in result
     assert "+00:00" not in result
     assert "thiết bị Cảm biến 01; mission Ruộng lúa" in result
     assert "trung bình" not in result
@@ -662,7 +677,7 @@ async def test_telemetry_tool_handles_multiple_specific_queries_and_no_data(
     assert len(session.statements) == 2
     assert "Không có dữ liệu nhiệt độ trong hôm nay" in result
     assert "Độ ẩm cao nhất trong hôm nay: 82.3%" in result
-    assert "thời điểm 11:00:00 ngày 23/06/2026 (giờ Việt Nam)" in result
+    assert "11:00:00 ngày 23/06/2026 (giờ Việt Nam)" in result
     assert "trung bình" not in result
 
 
@@ -899,6 +914,11 @@ def test_system_prompt_requires_search_source_links() -> None:
     assert "Do not add a separate" in SYSTEM_PROMPT
 
 
+def test_system_prompt_requires_all_relevant_extreme_occurrences() -> None:
+    assert "exact telemetry minimum or maximum occurs multiple times" in SYSTEM_PROMPT
+    assert "Never present\n   only the latest occurrence" in SYSTEM_PROMPT
+
+
 def test_react_prompt_limits_thought() -> None:
     from agent.prompts import REACT_PROMPT
 
@@ -1016,6 +1036,11 @@ def test_structured_parsers_accept_pydantic_dict_and_raw_content() -> None:
         ).tool
         == "none"
     )
+    recovered_route = _parse_fallback_route_decision(
+        SimpleNamespace(content='{"tool":"none"}')
+    )
+    assert recovered_route.tool == "none"
+    assert recovered_route.reason
 
     assert (
         _parse_tool_policy_decision(

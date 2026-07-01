@@ -105,6 +105,7 @@ SYSTEM_PROMPT = _load_prompt(
         required_markers=(
             "agricultural production in Vietnam",
             "source-named inline citation links",
+            "exact telemetry minimum or maximum occurs multiple times",
         ),
     )
 )
