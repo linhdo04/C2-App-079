@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from langsmith import Client
+from langsmith.utils import LangSmithConflictError
 
 from core.config import settings
 
@@ -142,18 +143,31 @@ def sync_prompts(
 
         prompt_object = build_prompt_object(prompt_spec.content)
 
-        url = client.push_prompt(
-            prompt_spec.identifier,
-            object=prompt_object,
-            parent_commit_hash="latest",
-            is_public=options.is_public,
-            description=prompt_spec.description,
-            tags=options.tags,
-            commit_tags=options.commit_tag,
-            commit_description=(
-                f"Sync local {options.environment} agent prompt defaults."
-            ),
-        )
+        try:
+            url = client.push_prompt(
+                prompt_spec.identifier,
+                object=prompt_object,
+                parent_commit_hash="latest",
+                is_public=options.is_public,
+                description=prompt_spec.description,
+                tags=options.tags,
+                commit_tags=options.commit_tag,
+                commit_description=(
+                    f"Sync local {options.environment} agent prompt defaults."
+                ),
+            )
+        except LangSmithConflictError as exc:
+            if not _is_unchanged_prompt_conflict(exc):
+                raise
+
+            results.append(
+                SyncResult(
+                    identifier=prompt_spec.identifier,
+                    status="unchanged",
+                    url=None,
+                )
+            )
+            continue
 
         results.append(
             SyncResult(
@@ -164,6 +178,10 @@ def sync_prompts(
         )
 
     return results
+
+
+def _is_unchanged_prompt_conflict(exc: LangSmithConflictError) -> bool:
+    return "Nothing to commit" in str(exc)
 
 
 def create_langsmith_client() -> PromptHubClient:

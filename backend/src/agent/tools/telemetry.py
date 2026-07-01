@@ -251,8 +251,16 @@ async def _execute_specific_queries(
             statement = _specific_telemetry_statement(user_id, time_range, query_kind)
             if time_range is None:
                 statement = statement.limit(data.limit)
-            rows = list((await session.execute(statement.limit(1))).all())
-            lines.append(_specific_query_summary(query_kind, rows, time_range))
+            rows = list((await session.execute(statement.limit(data.limit + 1))).all())
+            truncated = len(rows) > data.limit
+            lines.append(
+                _specific_query_summary(
+                    query_kind,
+                    rows[: data.limit],
+                    time_range,
+                    truncated=truncated,
+                )
+            )
     lines.append("- Đây là số đo lịch sử, không phải dự báo thời tiết.")
     return "\n".join(lines)
 
@@ -285,6 +293,19 @@ def _specific_telemetry_statement(
         if query_kind.endswith("_min")
         else cast(Any, field).desc()
     )
+    aggregate = func.min if query_kind.endswith("_min") else func.max
+    extreme_value = (
+        select(aggregate(cast(Any, field)))
+        .select_from(TelemetryModel)
+        .join(IoTNodeModel, cast(Any, TelemetryModel.iot_node_id == IoTNodeModel.id))
+        .join(MissionModel, cast(Any, IoTNodeModel.mission_id == MissionModel.id))
+        .where(
+            *_telemetry_filters(user_id, time_range),
+            cast(ColumnElement[bool], cast(Any, field).is_not(None)),
+        )
+        .correlate(None)
+        .scalar_subquery()
+    )
     statement = (
         select(
             TelemetryModel,
@@ -296,6 +317,7 @@ def _specific_telemetry_statement(
         .where(
             *_telemetry_filters(user_id, time_range),
             cast(ColumnElement[bool], cast(Any, field).is_not(None)),
+            cast(ColumnElement[bool], cast(Any, field) == extreme_value),
         )
         .order_by(
             order_by_value,
@@ -853,21 +875,36 @@ def _specific_query_summary(
     query_kind: TelemetryQueryKind,
     rows: list[Any],
     time_range: TelemetryTimeRange | None,
+    *,
+    truncated: bool = False,
 ) -> str:
     label, unit, stat_label = _query_display(query_kind)
     range_text = _query_range_text(time_range)
     if not rows:
         return f"- Không có dữ liệu {label.casefold()}{range_text}."
-    telemetry, node, mission = rows[0]
+    telemetry = rows[0][0]
     value = (
         telemetry.temperature_celsius
         if query_kind.startswith("temperature")
         else telemetry.humidity_percent
     )
+    occurrences_by_source: dict[tuple[str, str], list[str]] = {}
+    for occurrence, node, mission in reversed(rows):
+        occurrences_by_source.setdefault((node, mission), []).append(
+            _format_local_datetime(occurrence.timestamp)
+        )
+    occurrence_details = "; ".join(
+        f"thiết bị {node}; mission {mission}: {', '.join(timestamps)}"
+        for (node, mission), timestamps in occurrences_by_source.items()
+    )
+    count_text = (
+        f"ít nhất {len(rows) + 1} lần; hiển thị {len(rows)} lần mới nhất"
+        if truncated
+        else f"{len(rows)} lần"
+    )
     return (
         f"- {label} {stat_label}{range_text}: {float(value):.1f}{unit}; "
-        f"thời điểm {_format_local_datetime(telemetry.timestamp)}; "
-        f"thiết bị {node}; mission {mission}"
+        f"ghi nhận {count_text}; {occurrence_details}"
     )
 
 

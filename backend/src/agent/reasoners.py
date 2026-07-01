@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .prompts import REACT_PROMPT, SYSTEM_PROMPT
 from .react import Action, Memory, Reasoner, ReasoningDecision, Tool, _was_action_called
@@ -36,6 +36,7 @@ _RETRY_DELAY_PATTERNS = (
     re.compile(r"""['"]retryDelay['"]\s*:\s*['"](\d+(?:\.\d+)?)s['"]"""),
 )
 _MAX_SERVER_RETRY_DELAY_SECONDS = 5.0
+DEFAULT_FALLBACK_ROUTE_REASON = "No reason provided by fallback router."
 
 
 """Return the server-suggested retry delay (seconds) embedded in a 429 body, or None."""
@@ -58,7 +59,16 @@ class FallbackRouteDecision(BaseModel):
 
     tool: Literal["search", "telemetry", "analysis", "calculator", "none"]
     input: dict[str, Any] = Field(default_factory=dict)
-    reason: str = Field(min_length=1)
+    reason: str = Field(default=DEFAULT_FALLBACK_ROUTE_REASON, min_length=1)
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def default_blank_reason(cls, value: Any) -> Any:
+        if value is None:
+            return DEFAULT_FALLBACK_ROUTE_REASON
+        if isinstance(value, str) and not value.strip():
+            return DEFAULT_FALLBACK_ROUTE_REASON
+        return value
 
 
 async def _ainvoke_llm_with_retry(
