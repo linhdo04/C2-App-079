@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { CostManagementDashboard } from "@/components/features/admin/cost-management-dashboard";
+import { CostManagementDashboard } from "@/components/features/admin/cost-management/cost-management-dashboard";
 
 export const metadata: Metadata = {
   title: "Quản trị chi phí",
