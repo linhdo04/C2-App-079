@@ -63,7 +63,6 @@ async def _get_or_create_user(session: AsyncSession) -> UserModel:
     else:
         user.name = "AeroField Demo"
         user.password_hash = hash_password(DEMO_PASSWORD)
-        user.role = UserRole.ADMIN
         user.deleted_at = None
     await session.flush()
     return user
