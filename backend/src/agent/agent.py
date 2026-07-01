@@ -9,9 +9,19 @@ from core import settings
 
 from .agent_messages import load_agent_messages
 from .factory import create_default_agent
+from .intent_router import IntentRouter
+from .llm import llm
+from .pre_router import pre_route
 from .react import AgentEvent, AgentLoopResult, ConversationMessage, InMemoryMemory
 
 default_agent = create_default_agent()
+intent_router = IntentRouter(
+    llm,
+    timeout_seconds=settings.agent_intent_router_timeout_seconds,
+    min_confidence=settings.agent_intent_router_min_confidence,
+    max_retries=0,
+    backoff_seconds=settings.agent_llm_retry_backoff_seconds,
+)
 
 StatusPhase = Literal["routing", "tool", "synthesis"]
 
@@ -42,11 +52,20 @@ async def run_agent(
     session_id: str | None = None,
     history: Sequence[ConversationMessage] | None = None,
 ) -> str:
+    route = pre_route(question)
+    if route is not None:
+        return route.response
+
+    memory = _memory(history)
+    routed_answer = await _intent_router_answer(question, memory)
+    if routed_answer is not None:
+        return routed_answer
+
     result = await default_agent.run(
         question,
         user_id=user_id,
         session_id=session_id,
-        memory=_memory(history),
+        memory=memory,
     )
     return result.final_response
 
@@ -58,7 +77,26 @@ async def stream_agent(
     session_id: str | None = None,
     history: Sequence[ConversationMessage] | None = None,
 ) -> AsyncIterator[AgentStreamEvent]:
+    route = pre_route(question)
+    if route is not None:
+        yield {
+            "event": "status",
+            "phase": "synthesis",
+            "message": AGENT_MESSAGES.status("synthesis"),
+        }
+        for start in range(0, len(route.response), 32):
+            yield {
+                "event": "token",
+                "content": route.response[start : start + 32],
+            }
+        return
+
     memory = _memory(history)
+    routed_answer = await _intent_router_answer(question, memory)
+    if routed_answer is not None:
+        async for event in _stream_text_response(routed_answer):
+            yield event
+        return
 
     if hasattr(default_agent, "stream"):
         async for stream_event in default_agent.stream(
@@ -136,6 +174,34 @@ async def stream_agent(
         yield {
             "event": "token",
             "content": result.final_response[start : start + 32],
+        }
+
+
+async def _intent_router_answer(
+    question: str,
+    memory: InMemoryMemory,
+) -> str | None:
+    if not settings.agent_intent_router_enabled:
+        return None
+    try:
+        decision = await intent_router.route(question, memory)
+    except Exception:
+        return None
+    if decision is None or decision.route == "full_agent":
+        return None
+    return decision.answer
+
+
+async def _stream_text_response(content: str) -> AsyncIterator[AgentStreamEvent]:
+    yield {
+        "event": "status",
+        "phase": "synthesis",
+        "message": AGENT_MESSAGES.status("synthesis"),
+    }
+    for start in range(0, len(content), 32):
+        yield {
+            "event": "token",
+            "content": content[start : start + 32],
         }
 
 

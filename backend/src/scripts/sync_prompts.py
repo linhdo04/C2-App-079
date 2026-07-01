@@ -99,6 +99,11 @@ def load_local_prompt_specs(*, prefix: str) -> list[PromptSpec]:
             content=prompts.DEFAULT_TOOL_POLICY_PROMPT,
             description="Semantic tool policy classifier prompt.",
         ),
+        PromptSpec(
+            identifier=f"{prefix}intent_router_prompt",
+            content=prompts.DEFAULT_INTENT_ROUTER_PROMPT,
+            description="Lightweight intent router prompt.",
+        ),
     ]
 
 

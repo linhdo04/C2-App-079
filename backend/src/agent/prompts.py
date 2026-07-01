@@ -9,6 +9,7 @@ from core.config import settings
 
 from . import tracing
 from .prompt_defaults import (
+    DEFAULT_INTENT_ROUTER_PROMPT,
     DEFAULT_REACT_PROMPT,
     DEFAULT_SYSTEM_PROMPT,
     DEFAULT_TOOL_POLICY_PROMPT,
@@ -123,5 +124,13 @@ TOOL_POLICY_PROMPT = _load_prompt(
         name="tool_policy_prompt",
         fallback=DEFAULT_TOOL_POLICY_PROMPT,
         required_markers=("semantic tool policy classifier", "ToolPolicyDecision"),
+    )
+)
+
+INTENT_ROUTER_PROMPT = _load_prompt(
+    PromptSpec(
+        name="intent_router_prompt",
+        fallback=DEFAULT_INTENT_ROUTER_PROMPT,
+        required_markers=("fast intent router", "IntentRouteDecision"),
     )
 )
