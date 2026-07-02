@@ -35,8 +35,11 @@ tự mặc định dùng `search`.
 
 - `calculator`: AST arithmetic giới hạn.
 - `search`: Tavily, sau đó lọc/tóm tắt kết quả bằng DeepSeek trước khi đưa vào
-  ReAct memory. Nếu filter lỗi hoặc timeout, tool degrade về formatter thô và
-  ghi chú lỗi lọc.
+  ReAct memory. Với câu hỏi xác minh, filter phải đánh giá từng mệnh đề thay vì
+  coi kết quả cùng chủ đề là bằng chứng. Nếu filter lỗi hoặc timeout, tool
+  degrade về formatter thô và ghi chú lỗi lọc. Nếu reasoner tổng hợp cũng lỗi,
+  fallback chỉ trả danh sách nguồn và nói rõ chưa thể xác minh, không trình bày
+  snippet như kết luận.
 - `telemetry`: dữ liệu mission thuộc authenticated user; hỗ trợ lấy mẫu mới
   nhất hoặc lọc theo khoảng thời gian tương đối/explicit.
 - `analysis`: ước tính sản lượng cây trồng.
@@ -171,8 +174,8 @@ Prompt mặc định có thể được bootstrap lên LangSmith bằng:
 make agent-prompts-sync
 ```
 
-Script sync `system_prompt`, `react_prompt`, `tool_policy_prompt`, và
-`intent_router_prompt` từ local fallback hiện tại. Dùng
+Script sync `system_prompt`, `react_prompt`, `tool_policy_prompt`,
+`intent_router_prompt`, và `search_filter_prompt` từ local fallback hiện tại. Dùng
 `make agent-prompts-sync args="--dry-run"` để kiểm tra tên prompt trước khi
 push.
 

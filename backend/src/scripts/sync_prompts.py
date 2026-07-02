@@ -104,6 +104,11 @@ def load_local_prompt_specs(*, prefix: str) -> list[PromptSpec]:
             content=prompts.DEFAULT_INTENT_ROUTER_PROMPT,
             description="Lightweight intent router prompt.",
         ),
+        PromptSpec(
+            identifier=f"{prefix}search_filter_prompt",
+            content=prompts.DEFAULT_SEARCH_FILTER_PROMPT,
+            description="Web search result filtering and claim coverage prompt.",
+        ),
     ]
 
 

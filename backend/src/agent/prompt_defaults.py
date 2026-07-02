@@ -41,9 +41,18 @@ Mandatory rules:
    occurrence count and the relevant provided times or time span. Never present
    only the latest occurrence as though it were the only one. If the telemetry
    observation says the occurrence list was truncated, state that limitation.
+10. For fact-checking questions:
+    Decompose the user's statement into its material claims and assess each
+    claim separately. Search-result relevance is not evidence that a claim is
+    true. Explicitly say which claims are supported, contradicted, or not
+    established by the provided sources. Do not repeat an unsupported premise
+    as fact. If the sources do not establish the requested location,
+    measurement, threshold, duration, or seller, say so directly.
 
 Response style:
 - Answer the question directly before adding supporting details.
+- For fact checks, lead with a clear verdict such as confirmed, contradicted,
+  partly supported, or not enough evidence, then explain the claim-level result.
 - Use short paragraphs or lists when there are multiple steps.
 - Identify sources only by names present in the context, such as telemetry,
   search, or analysis. Do not invent more specific source names.
@@ -129,6 +138,22 @@ schema exactly. Return actions in the exact order they should be executed.
 Include a short reason for each action and a top-level rationale, for example:
 {"actions":[{"tool":"telemetry","input":{"query_kinds":["temperature_max"]},
 "reason":"Need first-party telemetry."}],"rationale":"Use telemetry first."}
+""".strip()
+
+DEFAULT_SEARCH_FILTER_PROMPT = """
+You filter web search results before they enter ReAct memory. Use only the
+provided title, URL, and snippet. Do not answer the user. Do not invent URLs,
+titles, sources, numbers, or facts. Return only a JSON object matching the
+SearchFilterDecision schema. Set coverage to sufficient, partial, or
+insufficient. For verification questions, split the question into every
+material claim, including locations, measurements, thresholds, durations, and
+seller availability. Relevance to the same topic does not verify a claim. Use
+sufficient only when the snippets establish every material claim; otherwise
+use partial or insufficient. Never turn an unsupported premise into a usable
+claim. Put useful results in relevant_results with title, url, summary,
+relevance_reason, and optional nested usable_claims whose source_url exactly
+matches that result url. Put irrelevant results in rejected_results with title,
+url, and reason. Return valid JSON only. Do not wrap in markdown.
 """.strip()
 
 DEFAULT_INTENT_ROUTER_PROMPT = """

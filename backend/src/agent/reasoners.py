@@ -847,19 +847,16 @@ def _format_search_fallback_answer(
 
     bullets = []
     for result in unique_results:
-        snippet = _shorten(result.get("snippet", "").strip(), 260)
         title = result.get("title") or _source_label(result["url"])
         citation = f"[{title}]({result['url']})"
-        if snippet:
-            bullets.append(f"- {snippet} {citation}")
-        else:
-            bullets.append(f"- Có nguồn liên quan: {citation}")
+        bullets.append(f"- {citation}")
 
     return "\n\n".join(
         [
-            "Tôi tìm thấy một số nguồn web liên quan. Các tên nguồn trong "
-            "nội dung là đường dẫn để kiểm chứng.",
-            "Thông tin nổi bật:\n" + "\n".join(bullets),
+            "Tôi chưa thể xác minh kết luận trong câu hỏi vì bước tổng hợp "
+            "nguồn đang không khả dụng. Các kết quả cùng chủ đề không đủ để "
+            "khẳng định từng địa điểm, số liệu, điều kiện hoặc nơi bán mà bạn nêu.",
+            "Các nguồn tìm được để kiểm tra thêm:\n" + "\n".join(bullets),
         ]
     )
 
