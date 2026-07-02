@@ -11,6 +11,7 @@ from . import tracing
 from .prompt_defaults import (
     DEFAULT_INTENT_ROUTER_PROMPT,
     DEFAULT_REACT_PROMPT,
+    DEFAULT_SEARCH_FILTER_PROMPT,
     DEFAULT_SYSTEM_PROMPT,
     DEFAULT_TOOL_POLICY_PROMPT,
 )
@@ -107,6 +108,7 @@ SYSTEM_PROMPT = _load_prompt(
             "agricultural production in Vietnam",
             "source-named inline citation links",
             "exact telemetry minimum or maximum occurs multiple times",
+            "Decompose the user's statement into its material claims",
         ),
     )
 )
@@ -124,6 +126,18 @@ TOOL_POLICY_PROMPT = _load_prompt(
         name="tool_policy_prompt",
         fallback=DEFAULT_TOOL_POLICY_PROMPT,
         required_markers=("semantic tool policy classifier", "ToolPolicyDecision"),
+    )
+)
+
+SEARCH_FILTER_PROMPT = _load_prompt(
+    PromptSpec(
+        name="search_filter_prompt",
+        fallback=DEFAULT_SEARCH_FILTER_PROMPT,
+        required_markers=(
+            "filter web search results before they enter ReAct memory",
+            "SearchFilterDecision schema",
+            "Relevance to the same topic does not verify a claim",
+        ),
     )
 )
 

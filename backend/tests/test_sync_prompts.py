@@ -11,6 +11,7 @@ def test_load_local_prompt_specs_includes_intent_router() -> None:
     identifiers = [prompt_spec.identifier for prompt_spec in prompt_specs]
 
     assert "local_intent_router_prompt" in identifiers
+    assert "local_search_filter_prompt" in identifiers
 
 
 def test_sync_prompts_continues_when_prompt_is_unchanged(

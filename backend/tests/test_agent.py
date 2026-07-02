@@ -12,7 +12,7 @@ import pytest
 from fakes import FakePolicyLLM
 
 from agent import run_agent, stream_agent
-from agent.prompts import SYSTEM_PROMPT
+from agent.prompts import SEARCH_FILTER_PROMPT, SYSTEM_PROMPT
 from agent.react import (
     Action,
     AgentLoopResult,
@@ -919,6 +919,19 @@ def test_system_prompt_requires_all_relevant_extreme_occurrences() -> None:
     assert "Never present\n   only the latest occurrence" in SYSTEM_PROMPT
 
 
+def test_system_prompt_requires_claim_level_fact_checking() -> None:
+    assert "Decompose the user's statement into its material claims" in SYSTEM_PROMPT
+    assert "Search-result relevance is not evidence" in SYSTEM_PROMPT
+    assert "supported, contradicted, or not\n    established" in SYSTEM_PROMPT
+
+
+def test_search_filter_prompt_requires_claim_level_coverage() -> None:
+    assert "SearchFilterDecision schema" in SEARCH_FILTER_PROMPT
+    assert "Relevance to the same topic does not verify a claim" in (
+        SEARCH_FILTER_PROMPT
+    )
+
+
 def test_react_prompt_limits_thought() -> None:
     from agent.prompts import REACT_PROMPT
 
@@ -1211,7 +1224,7 @@ async def test_search_result_filter_retries_retryable_llm_errors() -> None:
 
 
 @pytest.mark.asyncio
-async def test_llm_routed_fallback_formats_search_results_as_citations() -> None:
+async def test_llm_routed_fallback_does_not_present_search_snippets_as_facts() -> None:
     memory = InMemoryMemory()
     memory.add(
         ReActStep(
@@ -1230,9 +1243,12 @@ async def test_llm_routed_fallback_formats_search_results_as_citations() -> None
     )
     reasoner = LLMRoutedFallbackReasoner(None)
 
-    answer = await reasoner.finalize("Gợi ý chăm sóc hồ tiêu tại Gia Lai", memory)
+    answer = await reasoner.finalize(
+        "Có đúng hồ tiêu này chịu được -5°C và cao 10m không?", memory
+    )
 
-    assert "Thông tin nổi bật" in answer
+    assert "chưa thể xác minh" in answer
+    assert "Các nguồn tìm được để kiểm tra thêm" in answer
     assert (
         "[HƯỚNG DẪN QUY TRÌNH TRỒNG VÀ CHĂM SÓC CÂY HỒ TIÊU](https://example.com/ho-tieu)"
         in answer
@@ -1242,6 +1258,8 @@ async def test_llm_routed_fallback_formats_search_results_as_citations() -> None
     assert "Title:" not in answer
     assert "URL:" not in answer
     assert "Snippet:" not in answer
+    assert "Trước khi trồng cần chuẩn bị đất" not in answer
+    assert "Cần kiểm soát thoát nước" not in answer
 
 
 @pytest.mark.asyncio
