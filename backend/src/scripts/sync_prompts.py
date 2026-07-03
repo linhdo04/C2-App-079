@@ -29,7 +29,6 @@ class SyncOptions:
     environment: str
     prefix: str
     tags: list[str]
-    commit_tag: str
     is_public: bool
     dry_run: bool
 
@@ -161,7 +160,6 @@ def sync_prompts(
                 is_public=options.is_public,
                 description=prompt_spec.description,
                 tags=options.tags,
-                commit_tags=options.commit_tag,
                 commit_description=(
                     f"Sync local {options.environment} agent prompt defaults."
                 ),
@@ -234,13 +232,11 @@ def parse_args() -> SyncOptions:
     prefix = f"{environment}_"
 
     tags = args.tag or ["agent", environment]
-    commit_tag = environment
 
     return SyncOptions(
         environment=environment,
         prefix=prefix,
         tags=tags,
-        commit_tag=commit_tag,
         is_public=args.public,
         dry_run=args.dry_run,
     )
