@@ -20,6 +20,7 @@ def test_sync_prompts_continues_when_prompt_is_unchanged(
     class FakeClient:
         def __init__(self) -> None:
             self.identifiers: list[str] = []
+            self.commit_tags: list[str | list[str] | None] = []
 
         def push_prompt(
             self,
@@ -35,6 +36,7 @@ def test_sync_prompts_continues_when_prompt_is_unchanged(
             commit_description: str | None = None,
         ) -> str:
             self.identifiers.append(prompt_identifier)
+            self.commit_tags.append(commit_tags)
             if prompt_identifier == "local_system_prompt":
                 raise LangSmithConflictError("Nothing to commit")
             return f"https://example.test/{prompt_identifier}"
@@ -57,7 +59,6 @@ def test_sync_prompts_continues_when_prompt_is_unchanged(
         environment="local",
         prefix="local_",
         tags=["agent", "local"],
-        commit_tag="local",
         is_public=False,
         dry_run=False,
     )
@@ -70,6 +71,7 @@ def test_sync_prompts_continues_when_prompt_is_unchanged(
     )
 
     assert client.identifiers == ["local_system_prompt", "local_react_prompt"]
+    assert client.commit_tags == [None, None]
     assert results == [
         subject.SyncResult(identifier="local_system_prompt", status="unchanged"),
         subject.SyncResult(
