@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help run test lint lint-check format format-check typecheck check db-migrate db-upgrade db-downgrade db-seed agent-prompts-sync
+.PHONY: help run test lint lint-check format format-check typecheck check db-migrate db-upgrade db-downgrade db-seed agent-prompts-sync sync-prompts
 
 help:
 	@echo ""
@@ -72,5 +72,7 @@ db-downgrade:
 db-seed:
 	uv run python -m scripts.seed_demo
 
-sync-prompts:
+agent-prompts-sync:
 	uv run python -m scripts.sync_prompts $(args)
+
+sync-prompts: agent-prompts-sync

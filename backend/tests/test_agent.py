@@ -12,7 +12,7 @@ import pytest
 from fakes import FakePolicyLLM
 
 from agent import run_agent, stream_agent
-from agent.prompts import SYSTEM_PROMPT
+from agent.prompts import SEARCH_FILTER_PROMPT, SYSTEM_PROMPT
 from agent.react import (
     Action,
     AgentLoopResult,
@@ -532,18 +532,28 @@ async def test_telemetry_tool_queries_temperature_max_for_current_day_by_default
 ) -> None:
     from agent.react import ToolContext
 
-    row = (
-        TelemetryModel(
-            id=9,
-            iot_node_id=1,
-            timestamp=datetime(2026, 6, 23, 2, 0, tzinfo=UTC),
-            temperature_celsius=35.2,
-            humidity_percent=68,
-        ),
-        "Cảm biến 01",
-        "Ruộng lúa",
-    )
-    session = FakeTelemetrySession([[row]])
+    rows = [
+        (
+            TelemetryModel(
+                id=index,
+                iot_node_id=1,
+                timestamp=timestamp,
+                temperature_celsius=35.2,
+                humidity_percent=68,
+            ),
+            "Cảm biến 01",
+            "Ruộng lúa",
+        )
+        for index, timestamp in enumerate(
+            [
+                datetime(2026, 6, 23, 2, 0, tzinfo=UTC),
+                datetime(2026, 6, 23, 1, 30, tzinfo=UTC),
+                datetime(2026, 6, 23, 1, 0, tzinfo=UTC),
+            ],
+            start=9,
+        )
+    ]
+    session = FakeTelemetrySession([rows])
 
     @asynccontextmanager
     async def fake_db_session() -> Any:
@@ -567,13 +577,18 @@ async def test_telemetry_tool_queries_temperature_max_for_current_day_by_default
     assert "telemetry.timestamp >= " in statement_text
     assert "telemetry.timestamp < " in statement_text
     assert "telemetry.temperature_celsius DESC" in statement_text
+    assert "max(telemetry.temperature_celsius)" in statement_text
     assert "telemetry.timestamp DESC" in statement_text
     assert "telemetry.id DESC" in statement_text
+    assert statement._limit_clause.value == 51
     assert datetime(2026, 6, 22, 17, 0, tzinfo=UTC) in params.values()
     assert datetime(2026, 6, 23, 3, 0, tzinfo=UTC) in params.values()
     assert "Truy vấn telemetry theo chỉ số trong hôm nay" in result
     assert "Nhiệt độ cao nhất trong hôm nay: 35.2°C" in result
-    assert "thời điểm 09:00:00 ngày 23/06/2026 (giờ Việt Nam)" in result
+    assert "ghi nhận 3 lần" in result
+    assert "08:00:00 ngày 23/06/2026 (giờ Việt Nam)" in result
+    assert "08:30:00 ngày 23/06/2026 (giờ Việt Nam)" in result
+    assert "09:00:00 ngày 23/06/2026 (giờ Việt Nam)" in result
     assert "+00:00" not in result
     assert "thiết bị Cảm biến 01; mission Ruộng lúa" in result
     assert "trung bình" not in result
@@ -662,7 +677,7 @@ async def test_telemetry_tool_handles_multiple_specific_queries_and_no_data(
     assert len(session.statements) == 2
     assert "Không có dữ liệu nhiệt độ trong hôm nay" in result
     assert "Độ ẩm cao nhất trong hôm nay: 82.3%" in result
-    assert "thời điểm 11:00:00 ngày 23/06/2026 (giờ Việt Nam)" in result
+    assert "11:00:00 ngày 23/06/2026 (giờ Việt Nam)" in result
     assert "trung bình" not in result
 
 
@@ -899,6 +914,24 @@ def test_system_prompt_requires_search_source_links() -> None:
     assert "Do not add a separate" in SYSTEM_PROMPT
 
 
+def test_system_prompt_requires_all_relevant_extreme_occurrences() -> None:
+    assert "exact telemetry minimum or maximum occurs multiple times" in SYSTEM_PROMPT
+    assert "Never present\n   only the latest occurrence" in SYSTEM_PROMPT
+
+
+def test_system_prompt_requires_claim_level_fact_checking() -> None:
+    assert "Decompose the user's statement into its material claims" in SYSTEM_PROMPT
+    assert "Search-result relevance is not evidence" in SYSTEM_PROMPT
+    assert "supported, contradicted, or not\n    established" in SYSTEM_PROMPT
+
+
+def test_search_filter_prompt_requires_claim_level_coverage() -> None:
+    assert "SearchFilterDecision schema" in SEARCH_FILTER_PROMPT
+    assert "Relevance to the same topic does not verify a claim" in (
+        SEARCH_FILTER_PROMPT
+    )
+
+
 def test_react_prompt_limits_thought() -> None:
     from agent.prompts import REACT_PROMPT
 
@@ -929,12 +962,14 @@ def test_structured_output_uses_json_mode_when_supported() -> None:
 
 
 def test_structured_prompts_require_json_only() -> None:
-    from agent.prompts import REACT_PROMPT, TOOL_POLICY_PROMPT
+    from agent.prompts import INTENT_ROUTER_PROMPT, REACT_PROMPT, TOOL_POLICY_PROMPT
 
     assert "Return\nvalid JSON only" in REACT_PROMPT
     assert "Do not wrap in" in REACT_PROMPT
     assert "Return valid JSON only" in TOOL_POLICY_PROMPT
     assert "Do not wrap in" in TOOL_POLICY_PROMPT
+    assert "fast intent router" in INTENT_ROUTER_PROMPT
+    assert "IntentRouteDecision" in INTENT_ROUTER_PROMPT
 
 
 @pytest.mark.asyncio
@@ -1016,6 +1051,11 @@ def test_structured_parsers_accept_pydantic_dict_and_raw_content() -> None:
         ).tool
         == "none"
     )
+    recovered_route = _parse_fallback_route_decision(
+        SimpleNamespace(content='{"tool":"none"}')
+    )
+    assert recovered_route.tool == "none"
+    assert recovered_route.reason
 
     assert (
         _parse_tool_policy_decision(
@@ -1184,7 +1224,7 @@ async def test_search_result_filter_retries_retryable_llm_errors() -> None:
 
 
 @pytest.mark.asyncio
-async def test_llm_routed_fallback_formats_search_results_as_citations() -> None:
+async def test_llm_routed_fallback_does_not_present_search_snippets_as_facts() -> None:
     memory = InMemoryMemory()
     memory.add(
         ReActStep(
@@ -1203,9 +1243,12 @@ async def test_llm_routed_fallback_formats_search_results_as_citations() -> None
     )
     reasoner = LLMRoutedFallbackReasoner(None)
 
-    answer = await reasoner.finalize("Gợi ý chăm sóc hồ tiêu tại Gia Lai", memory)
+    answer = await reasoner.finalize(
+        "Có đúng hồ tiêu này chịu được -5°C và cao 10m không?", memory
+    )
 
-    assert "Thông tin nổi bật" in answer
+    assert "chưa thể xác minh" in answer
+    assert "Các nguồn tìm được để kiểm tra thêm" in answer
     assert (
         "[HƯỚNG DẪN QUY TRÌNH TRỒNG VÀ CHĂM SÓC CÂY HỒ TIÊU](https://example.com/ho-tieu)"
         in answer
@@ -1215,6 +1258,8 @@ async def test_llm_routed_fallback_formats_search_results_as_citations() -> None
     assert "Title:" not in answer
     assert "URL:" not in answer
     assert "Snippet:" not in answer
+    assert "Trước khi trồng cần chuẩn bị đất" not in answer
+    assert "Cần kiểm soát thoát nước" not in answer
 
 
 @pytest.mark.asyncio
@@ -1362,6 +1407,48 @@ async def test_semantic_tool_policy_uses_user_telemetry_before_search() -> None:
     )
 
     assert decision == Action(tool="telemetry", input={"limit": 50})
+    assert llm.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_intent_router_returns_confident_direct_answer() -> None:
+    from agent.intent_router import IntentRouter
+
+    llm = FakePolicyLLM(
+        {
+            "route": "direct_answer",
+            "answer": "Tôi là AeroField.",
+            "confidence": 0.95,
+            "reason": "Identity question.",
+        }
+    )
+    router = IntentRouter(llm, timeout_seconds=1, min_confidence=0.65)
+
+    decision = await router.route("bạn là ai?", InMemoryMemory())
+
+    assert decision is not None
+    assert decision.route == "direct_answer"
+    assert decision.answer == "Tôi là AeroField."
+    assert llm.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_intent_router_ignores_low_confidence_decision() -> None:
+    from agent.intent_router import IntentRouter
+
+    llm = FakePolicyLLM(
+        {
+            "route": "clarify",
+            "answer": "Bạn có thể nói rõ hơn không?",
+            "confidence": 0.2,
+            "reason": "Uncertain.",
+        }
+    )
+    router = IntentRouter(llm, timeout_seconds=1, min_confidence=0.65)
+
+    decision = await router.route("nó bị vậy thì sao", InMemoryMemory())
+
+    assert decision is None
     assert llm.calls == 1
 
 
@@ -1834,8 +1921,19 @@ async def test_llm_routed_fallback_without_search_raises_router_error() -> None:
 async def test_run_agent_forwards_bounded_history(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from agent.intent_router import IntentRouteDecision
+
     seen_memory: Any = None
     seen_session_id: str | None = None
+
+    class FakeRouter:
+        async def route(self, *args: Any, **kwargs: Any) -> IntentRouteDecision:
+            return IntentRouteDecision(
+                route="full_agent",
+                answer=None,
+                confidence=0.9,
+                reason="Test should exercise full agent facade.",
+            )
 
     class FakeAgent:
         async def run(self, goal: str, **kwargs: Any) -> AgentLoopResult:
@@ -1844,6 +1942,7 @@ async def test_run_agent_forwards_bounded_history(
             seen_session_id = kwargs["session_id"]
             return AgentLoopResult("answer", True, 1, (), "done", "run")
 
+    monkeypatch.setattr("agent.agent.intent_router", FakeRouter())
     monkeypatch.setattr("agent.agent.default_agent", FakeAgent())
     answer = await run_agent(
         "question",
@@ -1857,9 +1956,151 @@ async def test_run_agent_forwards_bounded_history(
 
 
 @pytest.mark.asyncio
+async def test_run_agent_fast_path_skips_agent_for_greeting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UnexpectedRouter:
+        async def route(self, *args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("intent router should not run for greeting")
+
+    class UnexpectedAgent:
+        async def run(self, goal: str, **kwargs: Any) -> AgentLoopResult:
+            raise AssertionError("full agent should not run for greeting")
+
+    monkeypatch.setattr("agent.agent.intent_router", UnexpectedRouter())
+    monkeypatch.setattr("agent.agent.default_agent", UnexpectedAgent())
+
+    answer = await run_agent("chào")
+
+    assert "Xin chào" in answer
+
+
+@pytest.mark.asyncio
+async def test_run_agent_fast_path_skips_agent_for_identity_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent.intent_router import IntentRouteDecision
+
+    class FakeRouter:
+        async def route(self, *args: Any, **kwargs: Any) -> IntentRouteDecision:
+            return IntentRouteDecision(
+                route="direct_answer",
+                answer="Tôi là AeroField, trợ lý AI hỗ trợ nông nghiệp.",
+                confidence=0.95,
+                reason="Identity question.",
+            )
+
+    class UnexpectedAgent:
+        async def run(self, goal: str, **kwargs: Any) -> AgentLoopResult:
+            raise AssertionError("full agent should not run for identity question")
+
+    monkeypatch.setattr("agent.agent.intent_router", FakeRouter())
+    monkeypatch.setattr("agent.agent.default_agent", UnexpectedAgent())
+
+    answer = await run_agent("bạn là ai?")
+
+    assert "AeroField" in answer
+    assert "trợ lý AI" in answer
+
+
+@pytest.mark.asyncio
+async def test_run_agent_fast_path_skips_agent_for_capability_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent.intent_router import IntentRouteDecision
+
+    class FakeRouter:
+        async def route(self, *args: Any, **kwargs: Any) -> IntentRouteDecision:
+            return IntentRouteDecision(
+                route="direct_answer",
+                answer="Tôi có thể kiểm tra dữ liệu nhiệt độ/độ ẩm và tưới tiêu.",
+                confidence=0.93,
+                reason="Capability question.",
+            )
+
+    class UnexpectedAgent:
+        async def run(self, goal: str, **kwargs: Any) -> AgentLoopResult:
+            raise AssertionError("full agent should not run for capability question")
+
+    monkeypatch.setattr("agent.agent.intent_router", FakeRouter())
+    monkeypatch.setattr("agent.agent.default_agent", UnexpectedAgent())
+
+    answer = await run_agent("bạn làm được gì?")
+
+    assert "dữ liệu nhiệt độ/độ ẩm" in answer
+    assert "tưới tiêu" in answer
+
+
+@pytest.mark.asyncio
+async def test_run_agent_clarifies_short_ambiguous_input_without_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent.intent_router import IntentRouteDecision
+
+    class FakeRouter:
+        async def route(self, *args: Any, **kwargs: Any) -> IntentRouteDecision:
+            return IntentRouteDecision(
+                route="clarify",
+                answer="Bạn có thể nói rõ hơn hiện tượng bạn đang gặp không?",
+                confidence=0.82,
+                reason="Ambiguous short input.",
+            )
+
+    class UnexpectedAgent:
+        async def run(self, goal: str, **kwargs: Any) -> AgentLoopResult:
+            raise AssertionError("full agent should not run for ambiguous input")
+
+    monkeypatch.setattr("agent.agent.intent_router", FakeRouter())
+    monkeypatch.setattr("agent.agent.default_agent", UnexpectedAgent())
+
+    answer = await run_agent("nếu mà có truột thì sao")
+
+    assert "nói rõ hơn" in answer
+    assert "hiện tượng" in answer
+
+
+@pytest.mark.asyncio
+async def test_run_agent_uses_full_agent_when_intent_router_selects_full_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent.intent_router import IntentRouteDecision
+
+    class FakeRouter:
+        async def route(self, *args: Any, **kwargs: Any) -> IntentRouteDecision:
+            return IntentRouteDecision(
+                route="full_agent",
+                answer=None,
+                confidence=0.91,
+                reason="Needs telemetry.",
+            )
+
+    class FakeAgent:
+        async def run(self, goal: str, **kwargs: Any) -> AgentLoopResult:
+            return AgentLoopResult("full answer", True, 1, (), "done", "run")
+
+    monkeypatch.setattr("agent.agent.intent_router", FakeRouter())
+    monkeypatch.setattr("agent.agent.default_agent", FakeAgent())
+
+    answer = await run_agent("độ ẩm hôm nay thế nào?")
+
+    assert answer == "full answer"
+
+
+@pytest.mark.asyncio
 async def test_stream_agent_emits_live_tool_status_and_incremental_tokens(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from agent.intent_router import IntentRouteDecision
+
+    class FakeRouter:
+        async def route(self, *args: Any, **kwargs: Any) -> IntentRouteDecision:
+            return IntentRouteDecision(
+                route="full_agent",
+                answer=None,
+                confidence=0.9,
+                reason="Test should exercise streaming agent.",
+            )
+
     class FakeAgent:
         async def run(self, goal: str, **kwargs: Any) -> AgentLoopResult:
             from agent.react import AgentEvent
@@ -1876,6 +2117,7 @@ async def test_stream_agent_emits_live_tool_status_and_incremental_tokens(
                 "run",
             )
 
+    monkeypatch.setattr("agent.agent.intent_router", FakeRouter())
     monkeypatch.setattr("agent.agent.default_agent", FakeAgent())
     events = [event async for event in stream_agent("question", user_id=7)]
     assert events[0]["phase"] == "routing"
@@ -1887,9 +2129,75 @@ async def test_stream_agent_emits_live_tool_status_and_incremental_tokens(
 
 
 @pytest.mark.asyncio
+async def test_stream_agent_fast_path_emits_tokens_without_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UnexpectedAgent:
+        async def stream(self, *args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("streaming agent should not run for greeting")
+
+        async def run(self, goal: str, **kwargs: Any) -> AgentLoopResult:
+            raise AssertionError("fallback agent should not run for greeting")
+
+    monkeypatch.setattr("agent.agent.default_agent", UnexpectedAgent())
+
+    events = [event async for event in stream_agent("hello")]
+
+    assert events[0]["phase"] == "synthesis"
+    assert "".join(
+        event["content"] for event in events if event["event"] == "token"
+    ).startswith("Xin chào")
+
+
+@pytest.mark.asyncio
+async def test_stream_agent_intent_router_emits_direct_answer_without_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent.intent_router import IntentRouteDecision
+
+    class FakeRouter:
+        async def route(self, *args: Any, **kwargs: Any) -> IntentRouteDecision:
+            return IntentRouteDecision(
+                route="direct_answer",
+                answer="Tôi là AeroField.",
+                confidence=0.96,
+                reason="Identity question.",
+            )
+
+    class UnexpectedAgent:
+        async def stream(self, *args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("streaming agent should not run for direct answer")
+
+        async def run(self, goal: str, **kwargs: Any) -> AgentLoopResult:
+            raise AssertionError("fallback agent should not run for direct answer")
+
+    monkeypatch.setattr("agent.agent.intent_router", FakeRouter())
+    monkeypatch.setattr("agent.agent.default_agent", UnexpectedAgent())
+
+    events = [event async for event in stream_agent("bạn là ai?")]
+
+    assert events[0]["phase"] == "synthesis"
+    assert (
+        "".join(event["content"] for event in events if event["event"] == "token")
+        == "Tôi là AeroField."
+    )
+
+
+@pytest.mark.asyncio
 async def test_stream_agent_does_not_generate_final_answer_twice(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from agent.intent_router import IntentRouteDecision
+
+    class FakeRouter:
+        async def route(self, *args: Any, **kwargs: Any) -> IntentRouteDecision:
+            return IntentRouteDecision(
+                route="full_agent",
+                answer=None,
+                confidence=0.9,
+                reason="Test should exercise fallback streaming path.",
+            )
+
     class UnexpectedStreamingReasoner:
         async def stream_finalize(self, *args: Any) -> Any:
             if False:
@@ -1902,6 +2210,7 @@ async def test_stream_agent_does_not_generate_final_answer_twice(
         async def run(self, goal: str, **kwargs: Any) -> AgentLoopResult:
             return AgentLoopResult("single final answer", True, 1, (), "done", "run")
 
+    monkeypatch.setattr("agent.agent.intent_router", FakeRouter())
     monkeypatch.setattr("agent.agent.default_agent", FakeAgent())
     events = [event async for event in stream_agent("question")]
 
@@ -1915,6 +2224,17 @@ async def test_stream_agent_does_not_generate_final_answer_twice(
 async def test_stream_agent_cancels_background_task_when_client_disconnects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from agent.intent_router import IntentRouteDecision
+
+    class FakeRouter:
+        async def route(self, *args: Any, **kwargs: Any) -> IntentRouteDecision:
+            return IntentRouteDecision(
+                route="full_agent",
+                answer=None,
+                confidence=0.9,
+                reason="Test should exercise cancellable full agent.",
+            )
+
     started = asyncio.Event()
     cancelled = asyncio.Event()
 
@@ -1928,6 +2248,7 @@ async def test_stream_agent_cancels_background_task_when_client_disconnects(
                 raise
             raise AssertionError("blocking agent unexpectedly completed")
 
+    monkeypatch.setattr("agent.agent.intent_router", FakeRouter())
     monkeypatch.setattr("agent.agent.default_agent", BlockingAgent())
     events = stream_agent("question")
 

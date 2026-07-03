@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .prompts import REACT_PROMPT, SYSTEM_PROMPT
 from .react import Action, Memory, Reasoner, ReasoningDecision, Tool, _was_action_called
@@ -36,6 +36,7 @@ _RETRY_DELAY_PATTERNS = (
     re.compile(r"""['"]retryDelay['"]\s*:\s*['"](\d+(?:\.\d+)?)s['"]"""),
 )
 _MAX_SERVER_RETRY_DELAY_SECONDS = 5.0
+DEFAULT_FALLBACK_ROUTE_REASON = "No reason provided by fallback router."
 
 
 """Return the server-suggested retry delay (seconds) embedded in a 429 body, or None."""
@@ -58,7 +59,16 @@ class FallbackRouteDecision(BaseModel):
 
     tool: Literal["search", "telemetry", "analysis", "calculator", "none"]
     input: dict[str, Any] = Field(default_factory=dict)
-    reason: str = Field(min_length=1)
+    reason: str = Field(default=DEFAULT_FALLBACK_ROUTE_REASON, min_length=1)
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def default_blank_reason(cls, value: Any) -> Any:
+        if value is None:
+            return DEFAULT_FALLBACK_ROUTE_REASON
+        if isinstance(value, str) and not value.strip():
+            return DEFAULT_FALLBACK_ROUTE_REASON
+        return value
 
 
 async def _ainvoke_llm_with_retry(
@@ -837,19 +847,16 @@ def _format_search_fallback_answer(
 
     bullets = []
     for result in unique_results:
-        snippet = _shorten(result.get("snippet", "").strip(), 260)
         title = result.get("title") or _source_label(result["url"])
         citation = f"[{title}]({result['url']})"
-        if snippet:
-            bullets.append(f"- {snippet} {citation}")
-        else:
-            bullets.append(f"- Có nguồn liên quan: {citation}")
+        bullets.append(f"- {citation}")
 
     return "\n\n".join(
         [
-            "Tôi tìm thấy một số nguồn web liên quan. Các tên nguồn trong "
-            "nội dung là đường dẫn để kiểm chứng.",
-            "Thông tin nổi bật:\n" + "\n".join(bullets),
+            "Tôi chưa thể xác minh kết luận trong câu hỏi vì bước tổng hợp "
+            "nguồn đang không khả dụng. Các kết quả cùng chủ đề không đủ để "
+            "khẳng định từng địa điểm, số liệu, điều kiện hoặc nơi bán mà bạn nêu.",
+            "Các nguồn tìm được để kiểm tra thêm:\n" + "\n".join(bullets),
         ]
     )
 

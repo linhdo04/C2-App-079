@@ -2,7 +2,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import ColumnElement, delete, select
+from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.security import hash_password
@@ -16,7 +16,9 @@ DEMO_EMAIL = "demo@aerofield.example.com"
 DEMO_PASSWORD = "Demo12345!"
 DEMO_MISSION_NAME = "Giám sát ruộng lúa mẫu"
 DEMO_NODE_SERIAL = "DEMO-ENV-001"
-TELEMETRY_SAMPLE_COUNT = 24
+TELEMETRY_SAMPLE_INTERVAL_MINUTES = 2
+TELEMETRY_SAMPLE_COUNT = 24 * 60 // TELEMETRY_SAMPLE_INTERVAL_MINUTES
+ANOMALY_SAMPLE_COUNT = 60 // TELEMETRY_SAMPLE_INTERVAL_MINUTES
 
 
 def build_telemetry_samples(
@@ -24,22 +26,28 @@ def build_telemetry_samples(
     *,
     now: datetime | None = None,
 ) -> list[TelemetryModel]:
-    """Build deterministic half-hourly environmental samples."""
+    """Build one day of deterministic two-minute environmental samples."""
     end_time = now or datetime.now(UTC)
+    anomaly_start = (TELEMETRY_SAMPLE_COUNT - ANOMALY_SAMPLE_COUNT) // 2
+    anomaly_end = anomaly_start + ANOMALY_SAMPLE_COUNT
     samples: list[TelemetryModel] = []
     for index in range(TELEMETRY_SAMPLE_COUNT):
         timestamp = end_time - timedelta(
-            minutes=30 * (TELEMETRY_SAMPLE_COUNT - index - 1)
+            minutes=TELEMETRY_SAMPLE_INTERVAL_MINUTES
+            * (TELEMETRY_SAMPLE_COUNT - index - 1)
         )
-        temperature = 26.0 + (index % 8) * 0.9
-        humidity = 82.0 - (index % 8) * 2.4
+        if anomaly_start <= index < anomaly_end:
+            temperature = 40.0 + (index - anomaly_start) % 9 * 0.5
+        else:
+            temperature = 26.0 + index % 15 * 0.5
+        humidity = 82.0 - index % 15 * 1.2
         samples.append(
             TelemetryModel(
                 iot_node_id=iot_node_id,
                 timestamp=timestamp,
                 temperature_celsius=round(temperature, 1),
                 humidity_percent=round(humidity, 1),
-                data={"soil_moisture_percent": round(68.0 - index * 0.4, 1)},
+                data={"soil_moisture_percent": round(68.0 - index % 20 * 0.4, 1)},
             )
         )
     return samples
@@ -63,7 +71,6 @@ async def _get_or_create_user(session: AsyncSession) -> UserModel:
     else:
         user.name = "AeroField Demo"
         user.password_hash = hash_password(DEMO_PASSWORD)
-        user.role = UserRole.ADMIN
         user.deleted_at = None
     await session.flush()
     return user
@@ -132,11 +139,6 @@ async def seed_demo(session: AsyncSession) -> tuple[int, int]:
     node = await _get_or_create_node(session, mission_id)
     node_id = cast(int, node.id)
 
-    await session.execute(
-        delete(TelemetryModel).where(
-            cast(ColumnElement[bool], TelemetryModel.iot_node_id == node_id)
-        )
-    )
     samples = build_telemetry_samples(node_id)
     session.add_all(cast(list[Any], samples))
     node.last_seen = samples[-1].timestamp

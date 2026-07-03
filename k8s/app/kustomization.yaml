@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - backend/configmap.yaml
+  - backend/deployment.yaml
+  - backend/service.yaml
+  - backend/autoscaling.yaml
+  - frontend/configmap.yaml
+  - frontend/deployment.yaml
+  - frontend/service.yaml
+  - frontend/autoscaling.yaml
+  - ingress.yaml
+  - network-policy.yaml
+images:
+  - name: BACKEND_IMAGE
+    newName: asia-southeast1-docker.pkg.dev/c2-app-501203/c2-app/backend
+    newTag: v1
+  - name: FRONTEND_IMAGE
+    newName: asia-southeast1-docker.pkg.dev/c2-app-501203/c2-app/frontend
+    newTag: v1

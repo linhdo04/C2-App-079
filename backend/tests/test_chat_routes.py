@@ -107,7 +107,7 @@ def user_factory(user_id: int = 7) -> UserModel:
     )
 
 
-def response_chunk_text(chunk: str | bytes | memoryview[int]) -> str:
+def response_chunk_text(chunk: str | bytes | memoryview) -> str:
     if isinstance(chunk, str):
         return chunk
     return bytes(chunk).decode()

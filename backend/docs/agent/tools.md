@@ -48,5 +48,8 @@ Nếu range không có dữ liệu, agent báo rõ thiếu telemetry và không 
 Khi user hỏi exact highest/lowest, tool dùng `query_kinds`:
 `temperature_max`, `temperature_min`, `humidity_max`, hoặc `humidity_min`. Nếu
 không nêu thời gian, exact min/max mặc định dùng “hôm nay” theo
-`Asia/Ho_Chi_Minh`. Các timestamp trong output đưa cho LLM/user được format theo
-giờ Việt Nam, ví dụ `12:09:33 ngày 23/06/2026 (giờ Việt Nam)`.
+`Asia/Ho_Chi_Minh`. Tool trả số lần và các timestamp cùng đạt giá trị cực trị,
+thay vì chỉ trả mẫu mới nhất. Số occurrence được giới hạn bởi `limit` (mặc định
+50); nếu còn kết quả, observation ghi rõ danh sách đã bị rút gọn. Các timestamp
+trong output đưa cho LLM/user được format theo giờ Việt Nam, ví dụ
+`12:09:33 ngày 23/06/2026 (giờ Việt Nam)`.
