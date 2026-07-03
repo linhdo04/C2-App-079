@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -12,13 +13,39 @@ from models.mission import MissionModel, MissionStatus
 from models.telemetry import TelemetryModel
 from models.user import UserModel, UserRole
 
-DEMO_EMAIL = "demo@aerofield.example.com"
-DEMO_PASSWORD = "Demo12345!"
+DEMO_ADMIN_EMAIL = "admin@aerofield.example.com"
+DEMO_ADMIN_PASSWORD = "Admin12345!"
+DEMO_OPERATOR_EMAIL = "demo@aerofield.example.com"
+DEMO_OPERATOR_PASSWORD = "Demo12345!"
 DEMO_MISSION_NAME = "Giám sát ruộng lúa mẫu"
 DEMO_NODE_SERIAL = "DEMO-ENV-001"
 TELEMETRY_SAMPLE_INTERVAL_MINUTES = 2
 TELEMETRY_SAMPLE_COUNT = 24 * 60 // TELEMETRY_SAMPLE_INTERVAL_MINUTES
 ANOMALY_SAMPLE_COUNT = 60 // TELEMETRY_SAMPLE_INTERVAL_MINUTES
+
+
+@dataclass(frozen=True)
+class DemoUser:
+    name: str
+    email: str
+    password: str
+    role: UserRole
+
+
+DEMO_USERS = (
+    DemoUser(
+        name="AeroField Admin",
+        email=DEMO_ADMIN_EMAIL,
+        password=DEMO_ADMIN_PASSWORD,
+        role=UserRole.ADMIN,
+    ),
+    DemoUser(
+        name="AeroField Operator",
+        email=DEMO_OPERATOR_EMAIL,
+        password=DEMO_OPERATOR_PASSWORD,
+        role=UserRole.OPERATOR,
+    ),
+)
 
 
 def build_telemetry_samples(
@@ -53,24 +80,28 @@ def build_telemetry_samples(
     return samples
 
 
-async def _get_or_create_user(session: AsyncSession) -> UserModel:
+async def _get_or_create_user(
+    session: AsyncSession,
+    demo_user: DemoUser,
+) -> UserModel:
     result = await session.execute(
         select(UserModel).where(
-            cast(ColumnElement[bool], UserModel.email == DEMO_EMAIL)
+            cast(ColumnElement[bool], UserModel.email == demo_user.email)
         )
     )
     user = result.scalar_one_or_none()
     if user is None:
         user = UserModel(
-            name="AeroField Demo",
-            email=DEMO_EMAIL,
-            password_hash=hash_password(DEMO_PASSWORD),
-            role=UserRole.ADMIN,
+            name=demo_user.name,
+            email=demo_user.email,
+            password_hash=hash_password(demo_user.password),
+            role=demo_user.role,
         )
         session.add(user)
     else:
-        user.name = "AeroField Demo"
-        user.password_hash = hash_password(DEMO_PASSWORD)
+        user.name = demo_user.name
+        user.password_hash = hash_password(demo_user.password)
+        user.role = demo_user.role
         user.deleted_at = None
     await session.flush()
     return user
@@ -130,11 +161,13 @@ async def _get_or_create_node(
     return node
 
 
-async def seed_demo(session: AsyncSession) -> tuple[int, int]:
-    """Create or refresh the demo account and its telemetry data."""
-    user = await _get_or_create_user(session)
-    user_id = cast(int, user.id)
-    mission = await _get_or_create_mission(session, user_id)
+async def seed_demo(session: AsyncSession) -> tuple[int, int, int]:
+    """Create or refresh demo users and telemetry owned by the operator."""
+    admin = await _get_or_create_user(session, DEMO_USERS[0])
+    operator = await _get_or_create_user(session, DEMO_USERS[1])
+    admin_id = cast(int, admin.id)
+    operator_id = cast(int, operator.id)
+    mission = await _get_or_create_mission(session, operator_id)
     mission_id = cast(int, mission.id)
     node = await _get_or_create_node(session, mission_id)
     node_id = cast(int, node.id)
@@ -143,21 +176,24 @@ async def seed_demo(session: AsyncSession) -> tuple[int, int]:
     session.add_all(cast(list[Any], samples))
     node.last_seen = samples[-1].timestamp
     session.add(node)
-    return user_id, len(samples)
+    return admin_id, operator_id, len(samples)
 
 
 async def main() -> None:
     await init_db()
     try:
         async with db_session() as session:
-            user_id, sample_count = await seed_demo(session)
+            admin_id, operator_id, sample_count = await seed_demo(session)
     finally:
         await close_db()
 
     print("Demo data seeded successfully.")
-    print(f"User ID: {user_id}")
-    print(f"Email: {DEMO_EMAIL}")
-    print(f"Password: {DEMO_PASSWORD}")
+    print(f"Admin ID: {admin_id}")
+    print(f"Admin email: {DEMO_ADMIN_EMAIL}")
+    print(f"Admin password: {DEMO_ADMIN_PASSWORD}")
+    print(f"Operator ID: {operator_id}")
+    print(f"Operator email: {DEMO_OPERATOR_EMAIL}")
+    print(f"Operator password: {DEMO_OPERATOR_PASSWORD}")
     print(f"Telemetry samples: {sample_count}")
 
 

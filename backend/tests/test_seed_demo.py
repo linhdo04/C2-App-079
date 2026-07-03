@@ -4,8 +4,11 @@ from typing import Any, cast
 
 import pytest
 
+from models.user import UserRole
 from scripts.seed_demo import (
     ANOMALY_SAMPLE_COUNT,
+    DEMO_ADMIN_EMAIL,
+    DEMO_OPERATOR_EMAIL,
     TELEMETRY_SAMPLE_COUNT,
     TELEMETRY_SAMPLE_INTERVAL_MINUTES,
     build_telemetry_samples,
@@ -65,14 +68,19 @@ async def test_seed_demo_appends_telemetry_without_deleting_existing_records(
         def add(self, record: Any) -> None:
             pass
 
-    user = SimpleNamespace(id=7)
+    admin = SimpleNamespace(id=7)
+    operator = SimpleNamespace(id=10)
     mission = SimpleNamespace(id=8)
     node = SimpleNamespace(id=9, last_seen=None)
+    seeded_users: list[Any] = []
+    mission_owner_ids: list[int] = []
 
-    async def fake_user(session: Any) -> Any:
-        return user
+    async def fake_user(session: Any, demo_user: Any) -> Any:
+        seeded_users.append(demo_user)
+        return admin if demo_user.role == UserRole.ADMIN else operator
 
     async def fake_mission(session: Any, user_id: int) -> Any:
+        mission_owner_ids.append(user_id)
         return mission
 
     async def fake_node(session: Any, mission_id: int) -> Any:
@@ -85,7 +93,16 @@ async def test_seed_demo_appends_telemetry_without_deleting_existing_records(
 
     result = await seed_demo(cast(Any, session))
 
-    assert result == (7, TELEMETRY_SAMPLE_COUNT)
+    assert result == (7, 10, TELEMETRY_SAMPLE_COUNT)
+    assert [user.email for user in seeded_users] == [
+        DEMO_ADMIN_EMAIL,
+        DEMO_OPERATOR_EMAIL,
+    ]
+    assert [user.role for user in seeded_users] == [
+        UserRole.ADMIN,
+        UserRole.OPERATOR,
+    ]
+    assert mission_owner_ids == [10]
     assert len(session.added_batches) == 1
     assert len(session.added_batches[0]) == TELEMETRY_SAMPLE_COUNT
     assert node.last_seen == session.added_batches[0][-1].timestamp
