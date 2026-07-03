@@ -1,0 +1,43 @@
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: c2-app-certificate
+  namespace: c2-app
+spec:
+  domains:
+    - docker-linhdt.site
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: c2-app
+  namespace: c2-app
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    kubernetes.io/ingress.global-static-ip-name: "c2-app-ingress-ip"
+    networking.gke.io/managed-certificates: "c2-app-certificate"
+    kubernetes.io/ingress.allow-http: "false"
+spec:
+  defaultBackend:
+    service:
+      name: frontend
+      port:
+        number: 3000
+  rules:
+    - host: docker-linhdt.site
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 8000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 3000

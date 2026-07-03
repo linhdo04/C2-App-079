@@ -23,9 +23,15 @@ COPY . .
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONPATH="/app/src"
 
-RUN adduser --disabled-password --gecos "" appuser
+RUN groupadd --gid 10001 appgroup \
+    && useradd \
+        --uid 10001 \
+        --gid 10001 \
+        --no-create-home \
+        --shell /usr/sbin/nologin \
+        appuser
 
-USER appuser
+USER 10001:10001
 
 EXPOSE 8000
 
