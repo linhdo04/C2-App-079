@@ -24,6 +24,8 @@ spec:
           value: /tmp
         - name: UV_CACHE_DIR
           value: /tmp/uv-cache
+        - name: UV_LINK_MODE
+          value: copy
       securityContext:
         allowPrivilegeEscalation: false
         capabilities:
@@ -101,7 +103,10 @@ spec:
           steps {
             container('backend-ci') {
               dir('backend') {
-                sh 'make check'
+                sh '''
+                  uv sync --frozen --extra dev
+                  make check
+                '''
               }
             }
           }
