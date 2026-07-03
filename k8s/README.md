@@ -9,7 +9,7 @@ the GKE, Cloud SQL, Memorystore, Artifact Registry, and static ingress IP from
 Do not apply the manifests with placeholders. Replace these values first:
 
 - `PROJECT_ID` and `RELEASE_TAG` in `app/kustomization.yaml`
-- `c2.example.com` in `app/ingress.yaml` and `app/backend/configmap.yaml`
+- `docker-linhdt.site` and `api.docker-linhdt.site` in the Ingress and backend ConfigMap
 - Cloud SQL and Redis private IPs in `app/backend/configmap.yaml`; obtain them
   from `terraform output` in `infra/gke-data`
 - all values shown in `app/backend/secret.example.yaml`
@@ -19,7 +19,7 @@ are compiled into the browser bundle:
 
 ```bash
 docker build \
-  --build-arg NEXT_PUBLIC_API_URL=https://c2.example.com/api \
+  --build-arg NEXT_PUBLIC_API_URL=https://api.docker-linhdt.site/api \
   -t asia-southeast1-docker.pkg.dev/PROJECT_ID/c2-app/frontend:RELEASE_TAG \
   frontend
 ```
