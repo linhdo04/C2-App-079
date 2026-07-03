@@ -1,0 +1,133 @@
+controller:
+  replicas: 1
+  # The upstream chart's Helm test Pod does not satisfy Restricted PSS.
+  # Readiness is verified with StatefulSet rollout and HTTP probes instead.
+  testEnabled: false
+  numExecutors: 0
+  executorMode: EXCLUSIVE
+  admin:
+    # existingSecret prevents Helm from generating credentials. createSecret
+    # must remain true so the chart mounts those existing keys for JCasC.
+    createSecret: true
+    existingSecret: jenkins-admin
+    userKey: jenkins-admin-user
+    passwordKey: jenkins-admin-password
+  jenkinsUrl: https://jenkins.docker-linhdt.site
+  javaOpts: >-
+    -Xms512m -Xmx2048m
+    -Djenkins.install.runSetupWizard=false
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 3Gi
+  podSecurityContextOverride:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+  serviceType: ClusterIP
+  serviceAnnotations:
+    cloud.google.com/neg: '{"ingress": true}'
+    cloud.google.com/backend-config: '{"default": "jenkins-health"}'
+  ingress:
+    enabled: true
+    apiVersion: networking.k8s.io/v1
+    pathType: Prefix
+    path: /
+    hostName: jenkins.docker-linhdt.site
+    annotations:
+      # GKE's external Ingress controller still selects resources through this
+      # annotation; spec.ingressClassName is not handled by this controller.
+      kubernetes.io/ingress.class: gce
+      kubernetes.io/ingress.global-static-ip-name: jenkins-ingress-ip
+      networking.gke.io/managed-certificates: jenkins-certificate
+      kubernetes.io/ingress.allow-http: "false"
+  installPlugins:
+    - kubernetes:4423.vb_59f230b_ce53
+    - workflow-aggregator:608.v67378e9d3db_1
+    - git:5.10.1
+    - configuration-as-code:2089.v970a_0b_a_8cc6d
+    - credentials-binding:702.vfe613e537e88
+    - pipeline-stage-view:2.38
+  installLatestPlugins: false
+  installLatestSpecifiedPlugins: false
+  initializeOnce: true
+  JCasC:
+    defaultConfig: true
+    security:
+      apiToken:
+        creationOfLegacyTokenEnabled: false
+        tokenGenerationOnCreationEnabled: false
+        usageStatisticsEnabled: false
+  sidecars:
+    configAutoReload:
+      enabled: true
+      containerSecurityContext:
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+
+persistence:
+  enabled: true
+  storageClass: jenkins-storage
+  accessMode: ReadWriteOnce
+  size: 50Gi
+
+agent:
+  enabled: true
+  namespace: jenkins
+  useDefaultServiceAccount: true
+  serviceAccount: jenkins-agent
+  websocket: true
+  privileged: false
+  runAsUser: 1000
+  runAsGroup: 1000
+  restrictedPssSecurityContext: true
+  alwaysPullImage: true
+  podRetention: Never
+  showRawYaml: false
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+rbac:
+  create: true
+  readSecrets: false
+
+serviceAccount:
+  create: true
+  automountServiceAccountToken: true
+
+serviceAccountAgent:
+  create: true
+  name: jenkins-agent
+  annotations:
+    iam.gke.io/gcp-service-account: jenkins-agent@c2-app-501203.iam.gserviceaccount.com
+  automountServiceAccountToken: true
+
+networkPolicy:
+  enabled: true
+  internalAgents:
+    allowed: true
+    namespaceLabels:
+      app.kubernetes.io/name: jenkins

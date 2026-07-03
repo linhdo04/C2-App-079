@@ -1,0 +1,22 @@
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: jenkins-certificate
+  namespace: jenkins
+spec:
+  domains:
+    - jenkins.docker-linhdt.site
+---
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: jenkins-health
+  namespace: jenkins
+spec:
+  timeoutSec: 60
+  connectionDraining:
+    drainingTimeoutSec: 30
+  healthCheck:
+    type: HTTP
+    requestPath: /login
+    port: 8080
