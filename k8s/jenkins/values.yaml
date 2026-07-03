@@ -59,13 +59,20 @@ controller:
   installPlugins:
     - kubernetes:4423.vb_59f230b_ce53
     - workflow-aggregator:608.v67378e9d3db_1
+    # Pin the Declarative Pipeline family together. Leaving these as transitive
+    # dependencies can mix incompatible versions and silently skip all stages.
+    - pipeline-model-definition:2.2291.v2934911987b_6
+    - pipeline-model-api:2.2291.v2934911987b_6
+    - pipeline-model-extensions:2.2291.v2934911987b_6
     - git:5.10.1
     - configuration-as-code:2089.v970a_0b_a_8cc6d
     - credentials-binding:702.vfe613e537e88
     - pipeline-stage-view:2.38
+    - timestamper:1.30
   installLatestPlugins: false
   installLatestSpecifiedPlugins: false
-  initializeOnce: true
+  initializeOnce: false
+  overwritePlugins: true
   JCasC:
     defaultConfig: true
     security:

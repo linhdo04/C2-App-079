@@ -19,6 +19,11 @@ spec:
       image: ghcr.io/astral-sh/uv:python3.12-bookworm
       command: ["sleep"]
       args: ["99d"]
+      env:
+        - name: HOME
+          value: /tmp
+        - name: UV_CACHE_DIR
+          value: /tmp/uv-cache
       securityContext:
         allowPrivilegeEscalation: false
         capabilities:
