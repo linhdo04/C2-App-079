@@ -1,25 +1,34 @@
 steps:
   - id: build-backend
     name: gcr.io/cloud-builders/docker
+    entrypoint: bash
     args:
-      - build
-      - --tag
-      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/backend:${_IMAGE_TAG}
-      - backend
+      - -euc
+      - |
+        if [[ "${_BUILD_BACKEND}" != "true" ]]; then
+          echo "Backend unchanged; skipping image build."
+          exit 0
+        fi
+        image="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/backend:${_IMAGE_TAG}"
+        docker build --tag "$${image}" backend
+        docker push "$${image}"
 
   - id: build-frontend
     name: gcr.io/cloud-builders/docker
+    entrypoint: bash
     args:
-      - build
-      - --build-arg
-      - NEXT_PUBLIC_API_URL=${_NEXT_PUBLIC_API_URL}
-      - --tag
-      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/frontend:${_IMAGE_TAG}
-      - frontend
-
-images:
-  - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/backend:${_IMAGE_TAG}
-  - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/frontend:${_IMAGE_TAG}
+      - -euc
+      - |
+        if [[ "${_BUILD_FRONTEND}" != "true" ]]; then
+          echo "Frontend unchanged; skipping image build."
+          exit 0
+        fi
+        image="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/frontend:${_IMAGE_TAG}"
+        docker build \
+          --build-arg "NEXT_PUBLIC_API_URL=${_NEXT_PUBLIC_API_URL}" \
+          --tag "$${image}" \
+          frontend
+        docker push "$${image}"
 
 options:
   logging: CLOUD_LOGGING_ONLY
@@ -28,6 +37,8 @@ substitutions:
   _REGION: asia-southeast1
   _REPOSITORY: c2-app
   _IMAGE_TAG: manual
-  _NEXT_PUBLIC_API_URL: https://docker-linhdt.site/api
+  _NEXT_PUBLIC_API_URL: https://api.docker-linhdt.site/api
+  _BUILD_BACKEND: "true"
+  _BUILD_FRONTEND: "true"
 
 timeout: 1800s
