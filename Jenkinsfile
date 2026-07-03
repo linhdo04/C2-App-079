@@ -72,6 +72,14 @@ spec:
     buildDiscarder(logRotator(numToKeepStr: '20'))
   }
 
+  parameters {
+    booleanParam(
+      name: 'FORCE_FULL_PIPELINE',
+      defaultValue: false,
+      description: 'Run all CI/CD stages even when backend/frontend files are unchanged. Production deploy remains restricted to main.',
+    )
+  }
+
   environment {
     PROJECT_ID = 'c2-app-501203'
     REGION = 'asia-southeast1'
@@ -115,6 +123,13 @@ spec:
             script: "grep -q '^frontend/' .jenkins-changed-files",
             returnStatus: true,
           ) == 0 ? 'true' : 'false'
+          if (params.FORCE_FULL_PIPELINE) {
+            env.BACKEND_CHANGED = 'true'
+            env.FRONTEND_CHANGED = 'true'
+            env.MIGRATIONS_CHANGED = 'true'
+            env.PROMPTS_CHANGED = 'true'
+            echo 'FORCE_FULL_PIPELINE enabled: all conditional stages will run.'
+          }
           echo "Backend changed: ${env.BACKEND_CHANGED}"
           echo "Frontend changed: ${env.FRONTEND_CHANGED}"
           echo "Migrations changed: ${env.MIGRATIONS_CHANGED}"
