@@ -32,7 +32,7 @@ data:
   API_PORT: "8000"
   API_PREFIX: "/api"
   APP_DEBUG: "False"
-  APP_DOMAIN: "docker-linhdt.site"
+  APP_DOMAIN: "api.docker-linhdt.site"
   APP_ENV: "production"
   APP_NAME: "Autonomous Drones"
   DEEPSEEK_API_BASE: "https://api.deepseek.com"

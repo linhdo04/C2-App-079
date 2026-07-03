@@ -223,8 +223,34 @@ spec:
               -e "s|image: BACKEND_IMAGE|image: $BACKEND_IMAGE|" \
               k8s/app/backend/migration-job.yaml > migration-job.yaml
 
+            RENDERED_IMAGE="$(sed -n 's/^[[:space:]]*image:[[:space:]]*//p' migration-job.yaml | head -1)"
+            if [ "$RENDERED_IMAGE" != "$BACKEND_IMAGE" ]; then
+              echo "Migration image mismatch: expected $BACKEND_IMAGE, rendered $RENDERED_IMAGE" >&2
+              exit 1
+            fi
+
             kubectl apply -f migration-job.yaml
-            kubectl -n c2-app wait --for=condition=complete "job/$MIGRATION_JOB" --timeout=10m
+
+            for _ in $(seq 1 120); do
+              SUCCEEDED="$(kubectl -n c2-app get "job/$MIGRATION_JOB" -o jsonpath='{.status.succeeded}')"
+              FAILED="$(kubectl -n c2-app get "job/$MIGRATION_JOB" -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}')"
+              if [ "$SUCCEEDED" = "1" ]; then
+                echo "Migration completed successfully."
+                break
+              fi
+              if [ "$FAILED" = "True" ]; then
+                kubectl -n c2-app logs "job/$MIGRATION_JOB" --all-containers=true --tail=300 || true
+                exit 1
+              fi
+              sleep 5
+            done
+
+            if [ "${SUCCEEDED:-0}" != "1" ]; then
+              kubectl -n c2-app describe "job/$MIGRATION_JOB" || true
+              kubectl -n c2-app logs "job/$MIGRATION_JOB" --all-containers=true --tail=300 || true
+              echo "Migration timed out after 10 minutes." >&2
+              exit 1
+            fi
           '''
         }
       }

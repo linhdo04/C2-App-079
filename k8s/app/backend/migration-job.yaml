@@ -27,7 +27,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: migrate
-          image: asia-southeast1-docker.pkg.dev/c2-app-501203/c2-app/backend:v1
+          image: BACKEND_IMAGE
           command: ["alembic", "upgrade", "head"]
           envFrom:
             - configMapRef:
