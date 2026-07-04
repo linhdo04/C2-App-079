@@ -7,7 +7,7 @@ metadata:
     app.kubernetes.io/name: frontend
     app.kubernetes.io/part-of: c2-app
 spec:
-  replicas: 3
+  replicas: 1
   revisionHistoryLimit: 3
   strategy:
     type: RollingUpdate
@@ -33,7 +33,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: frontend
-          image: asia-southeast1-docker.pkg.dev/c2-app-501203/c2-app/frontend:v1
+          image: asia-southeast1-docker.pkg.dev/c2-app-501203/c2-app/frontend:6-cfae5f34b323
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

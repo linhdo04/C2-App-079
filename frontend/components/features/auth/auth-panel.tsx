@@ -36,7 +36,7 @@ export function AuthPanel({ isLoading, onSubmit }: AuthPanelProps) {
           onSubmit={handleSubmit(onSubmit)}
           noValidate
         >
-          <div className="grid rounded-xl border border-border/60 bg-background/50 p-1">
+          {/* <div className="grid rounded-xl border border-border/60 bg-background/50 p-1">
             <Button
               className="bg-secondary text-foreground shadow-sm hover:bg-secondary"
               variant="ghost"
@@ -44,7 +44,7 @@ export function AuthPanel({ isLoading, onSubmit }: AuthPanelProps) {
             >
               Đăng nhập
             </Button>
-          </div>
+          </div> */}
 
           <div className="mt-7 grid gap-5">
             <Field>
