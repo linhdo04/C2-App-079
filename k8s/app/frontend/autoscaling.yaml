@@ -8,8 +8,8 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: frontend
-  minReplicas: 3
-  maxReplicas: 10
+  minReplicas: 1
+  maxReplicas: 3
   behavior:
     scaleDown:
       stabilizationWindowSeconds: 300
@@ -27,7 +27,7 @@ metadata:
   name: frontend
   namespace: c2-app
 spec:
-  minAvailable: 2
+  maxUnavailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: frontend
