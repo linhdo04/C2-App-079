@@ -1,131 +1,143 @@
-# Team 079 — Autonomous drones
+# Team 079 — Autonomous Drones
 
-## Mô tả
-...
+Ứng dụng quản lý drone tự hành, gồm dashboard giám sát, quản lý nhiệm vụ,
+telemetry và AI Agent hỗ trợ vận hành.
+
+## Công nghệ
+
+- Backend: FastAPI, SQLModel, PostgreSQL, Redis, LangGraph
+- Frontend: Next.js 16, React 19, TypeScript, Tailwind CSS
+- Infrastructure: Docker Compose và Kubernetes
 
 ## Thành viên
-- Name — Agent logic
+
+- Đỗ Thiện Lĩnh — Frontend, Backend, Infrastructure & K8s
 - Name — API & Backend
 - Name — Frontend & Testing
 
+## Cấu trúc dự án
+
+```text
+.
+├── backend/          FastAPI API, AI Agent và database migrations
+├── frontend/         Next.js web application
+├── infra/            Infrastructure configuration
+├── k8s/              Kubernetes manifests và tài liệu triển khai
+├── scripts/          Development và operation scripts
+└── docker-compose.yml
+```
+
+## Yêu cầu
+
+Cài đặt các công cụ sau trước khi chạy dự án:
+
+- Docker và Docker Compose v2
+- Python 3.11 trở lên
+- [uv](https://docs.astral.sh/uv/)
+- Node.js 22 trở lên
+- pnpm
+- make
+
+## Cấu hình môi trường
+
+Tạo file cấu hình backend:
+
+```bash
+cp backend/.env.example backend/.env
+```
+
+Điền các biến bắt buộc trong `backend/.env`, đặc biệt là thông tin PostgreSQL,
+Redis, `JWT_SECRET_KEY`, `TAVILY_API_KEY` và API key của LLM.
+
+Tạo file `frontend/.env`:
+
+```dotenv
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8000/api
+```
+
+Khi chạy local, sử dụng các hostname sau trong `backend/.env`:
+
+```dotenv
+POSTGRES_HOST=127.0.0.1
+REDIS_HOST=127.0.0.1
+```
+
 ## Quick Start
 
-### For Backend
+Chạy toàn bộ môi trường development bằng một lệnh:
+
+```bash
+./scripts/quick_start.sh
+```
+
+Script sẽ:
+
+1. Khởi động PostgreSQL và Redis bằng Docker Compose.
+2. Cài đặt dependencies cho backend và frontend.
+3. Chạy database migrations.
+4. Khởi động FastAPI và Next.js ở chế độ development.
+
+Sau khi khởi động thành công:
+
+- Frontend: <http://127.0.0.1:3000>
+- Backend: <http://127.0.0.1:8000>
+- API documentation: <http://127.0.0.1:8000/docs>
+
+Nhấn `Ctrl+C` để dừng backend và frontend. PostgreSQL và Redis vẫn tiếp tục
+chạy trong Docker.
+
+Để dừng các dịch vụ Docker:
+
+```bash
+docker compose --env-file ./backend/.env down
+```
+
+## Chạy thủ công
+
+Khởi động PostgreSQL và Redis:
+
+```bash
+docker compose --env-file ./backend/.env up -d database cache
+```
+
+Khởi động backend:
+
 ```bash
 cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-pre-commit install
-cp .env.example .env
+make install
+make db-upgrade
 make run
 ```
 
-### For Frontend
+Khởi động frontend trong terminal khác:
+
 ```bash
 cd frontend
-pnpm install
-cp .env.example .env
-pnpm dev
+pnpm install --frozen-lockfile
+pnpm run dev
 ```
 
-# Starter Code Template — Cohort 2
+## Kiểm tra mã nguồn
 
-Empty starter template for AI20K Build Cohort 2 team repositories. Includes pre-configured AI usage logging hooks for Claude Code, Cursor, Codex, Gemini CLI, Antigravity, and GitHub Copilot.
-
-## Structure
-
-```
-├── scripts/
-│   ├── _pyrun.sh             # Cross-platform Python launcher (bash)
-│   ├── _pyrun.cmd            # Cross-platform Python launcher (Windows)
-│   ├── setup_hooks.sh        # One-time pre-push hook installer (POSIX)
-│   ├── setup_hooks.ps1       # One-time pre-push hook installer (Windows)
-│   ├── log_hook.py           # AI tool hook handler (Claude / Cursor / Codex / Gemini / Copilot)
-│   ├── log_antigravity.py    # Auto-log hook for Antigravity
-│   ├── log_manual.py         # Manual log for ChatGPT / web tools
-│   └── submit_log.py         # Submits logs on git push
-├── .agents/                  # Antigravity rules + workflows
-├── .claude/  .codex/  .cursor/  .gemini/  .github/hooks/   # Per-tool hook configs
-├── .env.example
-├── JOURNAL.md                # Weekly journal — product journey & learnings
-└── WORKLOG.md                # Technical decisions, task assignments, brainstorming
-```
-
-## Getting Started
-
-### 1. Clone and install pre-push hook
-
-**Linux / macOS / Git Bash:**
-```bash
-git clone <repo-url>
-cd <repo>
-bash scripts/setup_hooks.sh
-```
-
-**Windows PowerShell:**
-```powershell
-git clone <repo-url>
-cd <repo>
-powershell -ExecutionPolicy Bypass -File scripts\setup_hooks.ps1
-```
-
-### 2. Configure environment
+Backend:
 
 ```bash
-cp .env.example .env       # macOS / Linux / Git Bash
-# copy .env.example .env   # Windows cmd
+cd backend
+make format
+make lint
+make check
 ```
 
-Fill in `AI_LOG_SERVER` and `AI_LOG_API_KEY` (provided by the course).
-
-### 3. Build your project
-
-This is an empty starter — pick any language/framework. The hooks are language-agnostic; they only need Python on the host (any of `python3`, `python`, or `py` works).
-
-## Weekly Journal
-
-Update **[JOURNAL.md](./JOURNAL.md)** at the end of every week:
-
-- Features shipped
-- AI tools used and how they helped
-- Hardest problem of the week and how you solved it
-- What you'd do differently
-- Plan for next week
-
-> JOURNAL.md **must be updated** before each PR — it is your learning record for the course.
-
-## Worklog
-
-Update **[WORKLOG.md](./WORKLOG.md)** whenever your team makes a technical decision or changes direction:
-
-- **Technical decisions** — why this approach over alternatives?
-- **Task assignments** — who does what, by when
-- **Brainstorming** — options considered, pros / cons, conclusion
-- **Important bugs** — root cause and fix
-
-## AI Logging
-
-Prompts and tool calls are **automatically logged** when you use any supported AI tool (Claude Code, Cursor, Codex, Gemini, Antigravity, Copilot). No manual steps needed after running `setup_hooks`.
-
-For ChatGPT or other web tools, log manually:
+Frontend:
 
 ```bash
-# POSIX
-bash scripts/_pyrun.sh scripts/log_manual.py --tool chatgpt --prompt "<what you did>"
-
-# Windows
-scripts\_pyrun.cmd scripts\log_manual.py --tool chatgpt --prompt "<what you did>"
+cd frontend
+pnpm run lint:check
+pnpm run format:fix
+pnpm run format:check
 ```
 
-### Python requirements
+## Triển khai Kubernetes
 
-The hook system needs **one** of: `python3`, `python`, or `py` on PATH.
-
-| OS | Recommended install |
-|---|---|
-| Windows | Python 3 from [python.org](https://www.python.org/downloads/) — installer adds both `python` and `py` to PATH |
-| Ubuntu / Debian | `sudo apt install python3` (already preinstalled on most distros) |
-| macOS | `brew install python3` or use system Python 3 |
-
-The `scripts/_pyrun.*` wrappers detect whichever is available — students do not need to alias `python3` → `python`.
+Xem hướng dẫn trong [k8s/README.md](./k8s/README.md) và
+[k8s/KUBERNETES_GUIDE.md](./k8s/KUBERNETES_GUIDE.md).
