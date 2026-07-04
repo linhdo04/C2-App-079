@@ -79,11 +79,33 @@ variable "environment" {
 variable "postgres_tier" {
   description = "Cloud SQL machine tier"
   type        = string
-  default     = "db-custom-2-7680"
+  default     = "db-custom-1-3840"
+}
+
+variable "postgres_availability_type" {
+  description = "Cloud SQL availability type; use ZONAL for demo and REGIONAL for HA"
+  type        = string
+  default     = "ZONAL"
+
+  validation {
+    condition     = contains(["ZONAL", "REGIONAL"], var.postgres_availability_type)
+    error_message = "postgres_availability_type must be ZONAL or REGIONAL."
+  }
 }
 
 variable "postgres_deletion_protection" {
   description = "Protect the production database from accidental deletion"
   type        = bool
   default     = true
+}
+
+variable "redis_tier" {
+  description = "Memorystore service tier; use BASIC for demo and STANDARD_HA for HA"
+  type        = string
+  default     = "BASIC"
+
+  validation {
+    condition     = contains(["BASIC", "STANDARD_HA"], var.redis_tier)
+    error_message = "redis_tier must be BASIC or STANDARD_HA."
+  }
 }

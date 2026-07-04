@@ -187,7 +187,7 @@ resource "google_sql_database_instance" "postgres" {
   settings {
     edition           = "ENTERPRISE"
     tier              = var.postgres_tier
-    availability_type = "REGIONAL"
+    availability_type = var.postgres_availability_type
 
     disk_type       = "PD_SSD"
     disk_size       = 10
@@ -240,7 +240,7 @@ resource "google_redis_instance" "redis" {
   project = local.project_id
 
   name           = var.redis_instance_name
-  tier           = "STANDARD_HA"
+  tier           = var.redis_tier
   memory_size_gb = var.redis_memory_size_gb
   region         = local.region
 
