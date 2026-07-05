@@ -66,13 +66,6 @@ resource "google_project_service" "sqladmin" {
   disable_on_destroy = false
 }
 
-resource "google_project_service" "redis" {
-  project = local.project_id
-  service = "redis.googleapis.com"
-
-  disable_on_destroy = false
-}
-
 resource "google_project_service" "artifactregistry" {
   project = local.project_id
   service = "artifactregistry.googleapis.com"
@@ -98,7 +91,7 @@ module "gke" {
   project_id = local.project_id
   name       = local.cluster_name
 
-  regional = true
+  regional = var.regional_cluster
   region   = local.region
   zones    = local.zones
 
@@ -108,7 +101,7 @@ module "gke" {
   ip_range_pods     = local.pods_range_name
   ip_range_services = local.services_range_name
 
-  deletion_protection = true
+  deletion_protection = var.cluster_deletion_protection
 
   enable_private_nodes    = true
   enable_private_endpoint = false
@@ -116,11 +109,14 @@ module "gke" {
   enable_shielded_nodes   = true
   identity_namespace      = "${local.project_id}.svc.id.goog"
 
-  http_load_balancing        = true
-  horizontal_pod_autoscaling = true
-  network_policy             = true
-  dns_cache                  = false
-  filestore_csi_driver       = false
+  http_load_balancing                  = true
+  horizontal_pod_autoscaling           = true
+  monitoring_enable_managed_prometheus = false
+  # Calico reserves too much CPU for the small demo nodes. Production profiles
+  # must enable network policy enforcement or use Dataplane V2.
+  network_policy       = false
+  dns_cache            = false
+  filestore_csi_driver = false
 
   release_channel = "REGULAR"
 
@@ -195,11 +191,11 @@ resource "google_sql_database_instance" "postgres" {
 
     backup_configuration {
       enabled                        = true
-      point_in_time_recovery_enabled = true
+      point_in_time_recovery_enabled = var.postgres_point_in_time_recovery_enabled
       start_time                     = "18:00"
-      transaction_log_retention_days = 7
+      transaction_log_retention_days = var.postgres_point_in_time_recovery_enabled ? 7 : null
       backup_retention_settings {
-        retained_backups = 14
+        retained_backups = var.postgres_backup_retained_count
         retention_unit   = "COUNT"
       }
     }
@@ -230,32 +226,6 @@ resource "google_sql_user" "app" {
   name     = var.postgres_user
   instance = google_sql_database_instance.postgres.name
   password = var.postgres_password
-}
-
-# ----------------------------------------------------
-# Memorystore Redis
-# ----------------------------------------------------
-
-resource "google_redis_instance" "redis" {
-  project = local.project_id
-
-  name           = var.redis_instance_name
-  tier           = var.redis_tier
-  memory_size_gb = var.redis_memory_size_gb
-  region         = local.region
-
-  redis_version = "REDIS_7_0"
-  auth_enabled  = true
-
-  authorized_network = local.network_self_link
-  connect_mode       = "PRIVATE_SERVICE_ACCESS"
-  reserved_ip_range  = local.private_services_range_name
-
-  labels = local.labels
-
-  depends_on = [
-    google_project_service.redis
-  ]
 }
 
 # ----------------------------------------------------
@@ -296,11 +266,6 @@ resource "google_artifact_registry_repository_iam_member" "gke_artifact_registry
 resource "google_compute_global_address" "app_ingress" {
   project = local.project_id
   name    = "c2-app-ingress-ip"
-}
-
-resource "google_compute_global_address" "jenkins_ingress" {
-  project = local.project_id
-  name    = "jenkins-ingress-ip"
 }
 
 # Jenkins agents use Workload Identity to push images without service-account

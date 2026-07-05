@@ -4,6 +4,18 @@ variable "node_count" {
   default     = 3
 }
 
+variable "regional_cluster" {
+  description = "Create a regional GKE cluster; keep false for the low-cost zonal demo profile"
+  type        = bool
+  default     = false
+}
+
+variable "cluster_deletion_protection" {
+  description = "Protect the GKE cluster from deletion; disable only during a reviewed topology migration"
+  type        = bool
+  default     = true
+}
+
 variable "node_min_count" {
   description = "Minimum number of GKE nodes per zone"
   type        = number
@@ -19,13 +31,13 @@ variable "node_max_count" {
 variable "machine_type" {
   description = "GKE node machine type"
   type        = string
-  default     = "e2-standard-2"
+  default     = "e2-medium"
 }
 
 variable "node_disk_size_gb" {
   description = "GKE node disk size in GB"
   type        = number
-  default     = 30
+  default     = 20
 }
 
 variable "postgres_instance_name" {
@@ -52,18 +64,6 @@ variable "postgres_password" {
   sensitive   = true
 }
 
-variable "redis_instance_name" {
-  description = "Memorystore Redis instance name"
-  type        = string
-  default     = "devops-redis"
-}
-
-variable "redis_memory_size_gb" {
-  description = "Redis memory size in GB"
-  type        = number
-  default     = 1
-}
-
 variable "artifact_registry_name" {
   description = "Artifact Registry Docker repository name"
   type        = string
@@ -79,7 +79,24 @@ variable "environment" {
 variable "postgres_tier" {
   description = "Cloud SQL machine tier"
   type        = string
-  default     = "db-custom-1-3840"
+  default     = "db-f1-micro"
+}
+
+variable "postgres_point_in_time_recovery_enabled" {
+  description = "Enable PostgreSQL point-in-time recovery; disable for low-cost demo environments"
+  type        = bool
+  default     = false
+}
+
+variable "postgres_backup_retained_count" {
+  description = "Number of automated Cloud SQL backups to retain"
+  type        = number
+  default     = 3
+
+  validation {
+    condition     = var.postgres_backup_retained_count >= 1 && var.postgres_backup_retained_count <= 365
+    error_message = "postgres_backup_retained_count must be between 1 and 365."
+  }
 }
 
 variable "postgres_availability_type" {
@@ -97,15 +114,4 @@ variable "postgres_deletion_protection" {
   description = "Protect the production database from accidental deletion"
   type        = bool
   default     = true
-}
-
-variable "redis_tier" {
-  description = "Memorystore service tier; use BASIC for demo and STANDARD_HA for HA"
-  type        = string
-  default     = "BASIC"
-
-  validation {
-    condition     = contains(["BASIC", "STANDARD_HA"], var.redis_tier)
-    error_message = "redis_tier must be BASIC or STANDARD_HA."
-  }
 }

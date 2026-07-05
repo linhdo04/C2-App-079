@@ -14,6 +14,9 @@ Consequences
 
 - Pros: very fast, mature Redis ecosystem, atomic counters and TTLs.
 - Cons: operational overhead (separate service) and need for connection/credentials management.
+- The low-cost demo deployment runs a single Redis StatefulSet with persistent
+  storage inside GKE. This is not highly available; production should use a
+  managed or replicated Redis deployment.
 
 Alternatives considered
 

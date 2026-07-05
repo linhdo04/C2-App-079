@@ -8,6 +8,10 @@ crash.*.log
 
 *.tfvars
 *.tfvars.json
+*.tfplan
+
+# Local migration backups contain Kubernetes Secrets and Jenkins data.
+c2-app-cluster-backup/
 
 override.tf
 override.tf.json
