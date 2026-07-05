@@ -1,8 +1,8 @@
 # C2 App on GKE
 
-This directory contains the production baseline for the application. It assumes
-the GKE, Cloud SQL, Memorystore, Artifact Registry, and static ingress IP from
-`infra/` already exist.
+This directory contains the deployment baseline for the application. It assumes
+the GKE cluster, Cloud SQL, Artifact Registry, and static ingress IP from
+`infra/` already exist. The demo profile runs Redis inside the cluster.
 
 ## Required values
 
@@ -10,8 +10,8 @@ Do not apply the manifests with placeholders. Replace these values first:
 
 - `PROJECT_ID` and `RELEASE_TAG` in `app/kustomization.yaml`
 - `docker-linhdt.site` and `api.docker-linhdt.site` in the Ingress and backend ConfigMap
-- Cloud SQL and Redis private IPs in `app/backend/configmap.yaml`; obtain them
-  from `terraform output` in `infra/gke-data`
+- Cloud SQL private IP in `app/backend/configmap.yaml`; obtain it from
+  `terraform output` in `infra/gke-data`
 - all values shown in `app/backend/secret.example.yaml`
 
 Build the frontend with the public API prefix because `NEXT_PUBLIC_*` values
@@ -43,8 +43,8 @@ kubectl -n c2-app create secret generic backend-secrets \
 
 The env file must define `POSTGRES_PASSWORD`, `REDIS_PASSWORD`,
 `JWT_SECRET_KEY`, `DEEPSEEK_API_KEY`, `TAVILY_API_KEY`, and optionally
-`LANGSMITH_API_KEY`. The Redis password is the sensitive
-`redis_auth_string` Terraform output.
+`LANGSMITH_API_KEY`. Generate a separate strong Redis password; the in-cluster
+Redis StatefulSet and backend read the same key from `backend-secrets`.
 
 ## Deploy
 

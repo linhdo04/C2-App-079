@@ -12,17 +12,17 @@ controller:
     existingSecret: jenkins-admin
     userKey: jenkins-admin-user
     passwordKey: jenkins-admin-password
-  jenkinsUrl: https://jenkins.docker-linhdt.site
+  jenkinsUrl: http://localhost:8080
   javaOpts: >-
-    -Xms512m -Xmx2048m
+    -Xms256m -Xmx1024m
     -Djenkins.install.runSetupWizard=false
   resources:
     requests:
-      cpu: 500m
-      memory: 1Gi
+      cpu: 100m
+      memory: 768Mi
     limits:
-      cpu: "2"
-      memory: 3Gi
+      cpu: "1"
+      memory: 1536Mi
   podSecurityContextOverride:
     runAsNonRoot: true
     runAsUser: 1000
@@ -44,7 +44,9 @@ controller:
     cloud.google.com/neg: '{"ingress": true}'
     cloud.google.com/backend-config: '{"default": "jenkins-health"}'
   ingress:
-    enabled: true
+    # A dedicated GCE Ingress creates a second external load balancer. Keep it
+    # disabled for the demo environment and use kubectl port-forward instead.
+    enabled: false
     apiVersion: networking.k8s.io/v1
     pathType: Prefix
     path: /

@@ -11,13 +11,14 @@ Terraform và Kubernetes có phạm vi khác nhau:
 
 | Lớp | Công cụ | Tài nguyên chính |
 | --- | --- | --- |
-| Hạ tầng GCP | Terraform trong `infra/gke-data` | GKE, VPC/subnet, Cloud SQL, Memorystore, Artifact Registry, static IP, IAM và Workload Identity |
+| Hạ tầng GCP | Terraform trong `infra/gke-data` | GKE, VPC/subnet, Cloud SQL, Artifact Registry, static IP, IAM và Workload Identity |
 | Nền tảng ứng dụng | Manifest trong `k8s/app` | Namespace, Deployment, Service, Ingress, certificate, HPA, PDB, NetworkPolicy và migration Job |
 | Jenkins | Helm và manifest trong `k8s/jenkins` | Jenkins controller, PVC, Ingress, agent ServiceAccount và quyền deploy |
 | Pipeline | `Jenkinsfile` và `cloudbuild.yaml` | Test, build image, push image, migrate, sync prompt và rollout |
 
 Kubernetes không chạy PostgreSQL hoặc Redis trong cluster. Backend kết nối qua
-private IP tới Cloud SQL và Memorystore được Terraform tạo sẵn.
+private IP tới Cloud SQL được Terraform tạo sẵn. Cost profile demo chạy Redis
+dạng StatefulSet bên trong cluster; production có thể thay bằng managed Redis.
 
 ## 2. Kiến trúc tổng thể
 
@@ -32,7 +33,7 @@ flowchart TD
     FEPods[3-10 frontend Pods]
     BEPods[3-10 backend Pods]
     SQL[(Cloud SQL PostgreSQL\n10.240.0.3:5432)]
-    Redis[(Memorystore Redis\n10.240.77.228:6379)]
+    Redis[(Redis StatefulSet\nredis:6379)]
     AR[Artifact Registry]
 
     User --> DNS --> LB --> Ingress
@@ -486,17 +487,21 @@ StorageClass và StorageClass không thay thế StatefulSet.
 
 ### 13.3 Jenkins Ingress
 
-Jenkins có domain `jenkins.docker-linhdt.site`, static IP riêng và
-ManagedCertificate riêng. Health check gọi `/login` port 8080. Service vẫn là
-ClusterIP và được gắn NEG.
+Cost profile cho môi trường demo tắt Jenkins Ingress để tránh tạo external Load
+Balancer thứ hai. Service vẫn là ClusterIP. Truy cập controller qua kubeconfig:
 
-`kubectl port-forward service/jenkins 8080:8080` chỉ cần khi:
+```bash
+kubectl -n jenkins port-forward service/jenkins 8080:8080
+```
 
-- Ingress/certificate chưa sẵn sàng;
-- cần truy cập khẩn cấp qua kubeconfig;
-- đang debug nội bộ.
+Sau đó mở `http://localhost:8080`. Cách này không nhận public webhook; cần scan
+hoặc trigger Multibranch Pipeline từ Jenkins. Khi cần webhook và truy cập công
+khai, bật lại Ingress sau khi đã chấp nhận chi phí Load Balancer, static IP và
+certificate.
 
-Khi Ingress hoạt động, người dùng không cần giữ port-forward.
+Cost profile cũng tắt GKE Network Policy enforcement vì Calico chiếm phần lớn
+CPU allocatable của node `e2-medium`. Các NetworkPolicy trong manifest chỉ có
+hiệu lực khi production bật lại enforcement hoặc Dataplane V2.
 
 ### 13.4 Jenkins security
 

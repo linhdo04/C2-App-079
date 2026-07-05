@@ -8,17 +8,9 @@ zero executors and must not build workloads itself.
 
 Apply and review the `infra/gke-data` plan. It creates:
 
-- the `jenkins-ingress-ip` global address;
 - `jenkins-agent@PROJECT_ID.iam.gserviceaccount.com`;
 - repository-scoped Artifact Registry writer access;
 - a Workload Identity binding for `jenkins/jenkins-agent`.
-
-Set the DNS A record for `jenkins.docker-linhdt.site` to:
-
-```bash
-cd infra/gke-data
-terraform output -raw jenkins_ingress_ip
-```
 
 ## 2. Bootstrap Kubernetes resources
 
@@ -36,12 +28,10 @@ kubectl -n jenkins create secret generic jenkins-admin \
 Store the generated password in a password manager. To supply a chosen password,
 replace the command substitution with the value from your secret manager.
 
-Install the GKE-specific certificate and health check, plus the namespace-scoped
-deployment permission for agents:
+Install the StorageClass and namespace-scoped deployment permission for agents:
 
 ```bash
 kubectl apply -f k8s/jenkins/storage-class.yaml
-kubectl apply -f k8s/jenkins/gke-resources.yaml
 kubectl apply -f k8s/jenkins/deploy-rbac.yaml
 ```
 
@@ -58,20 +48,22 @@ helm upgrade --install jenkins jenkins/jenkins \
   --timeout 15m
 ```
 
-Check readiness and the managed certificate:
+Check readiness:
 
 ```bash
 kubectl -n jenkins rollout status statefulset/jenkins --timeout=10m
-kubectl -n jenkins get pods,pvc,ingress
-kubectl -n jenkins describe managedcertificate jenkins-certificate
+kubectl -n jenkins get pods,pvc
 ```
 
-The certificate becomes active only after DNS points to the reserved address.
-Until then, access Jenkins locally with:
+The demo profile deliberately disables the public Jenkins Ingress to avoid a
+second external load balancer. Access Jenkins locally with:
 
 ```bash
 kubectl -n jenkins port-forward service/jenkins 8080:8080
 ```
+
+Then open <http://localhost:8080>. This mode does not accept public webhooks;
+scan or trigger the multibranch pipeline from Jenkins when needed.
 
 ## Security and operations
 
