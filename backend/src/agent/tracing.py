@@ -1,19 +1,23 @@
-"""LangSmith tracing helpers for the production agent."""
+"""Metadata-safe LangSmith tracing helpers for the production agent."""
 
+import hashlib
 import logging
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from langsmith import Client
+from langsmith.run_helpers import trace
 
 from core.config import settings
 
 logger = logging.getLogger(__name__)
+
+RunType = Literal["tool", "chain", "llm", "retriever", "embedding", "prompt", "parser"]
 
 
 @dataclass(frozen=True)
@@ -24,14 +28,10 @@ class AgentTraceContext:
 
 
 class _LangSmithObservation:
-    def __init__(
-        self,
-        run_id: UUID,
-        client: Client,
-        base_metadata: dict[str, Any],
-    ) -> None:
-        self._run_id = run_id
-        self._client = client
+    """Small adapter that keeps callers independent from LangSmith's RunTree."""
+
+    def __init__(self, run: Any, base_metadata: dict[str, Any]) -> None:
+        self._run = run
         self._base_metadata = base_metadata
 
     def update(
@@ -42,26 +42,16 @@ class _LangSmithObservation:
         status_message: str | None = None,
         output: Any | None = None,
     ) -> None:
-        extra: dict[str, Any] = {}
-        if metadata is not None:
-            extra["metadata"] = {**self._base_metadata, **metadata}
+        merged = {**self._base_metadata, **(metadata or {})}
         if level is not None:
-            extra["level"] = level
+            merged["status_level"] = level
         if status_message is not None:
-            extra["status_message"] = status_message
-
-        kwargs: dict[str, Any] = {}
-        if extra:
-            kwargs["extra"] = extra
-        if output is not None:
-            kwargs["outputs"] = (
-                output if isinstance(output, dict) else {"output": output}
-            )
-        if not kwargs:
-            return
-
+            merged["status"] = status_message
         try:
-            self._client.update_run(self._run_id, **kwargs)
+            self._run.set(metadata=merged)
+            if output is not None:
+                safe_output = output if isinstance(output, dict) else {"output": output}
+                self._run.add_outputs(safe_output)
         except Exception as exc:  # pragma: no cover - best-effort observability
             logger.warning("langsmith_run_update_failed: %s", type(exc).__name__)
 
@@ -92,6 +82,8 @@ def _get_langsmith_client() -> Client:
             api_key=settings.langsmith_api_key,
             api_url=settings.langsmith_endpoint,
             workspace_id=settings.langsmith_workspace_id,
+            hide_inputs=True,
+            hide_outputs=True,
         )
     return _langsmith_client
 
@@ -106,6 +98,39 @@ def reset_trace_context(token: Any) -> None:
 
 def current_trace_context() -> AgentTraceContext | None:
     return _current_trace_context.get()
+
+
+@contextmanager
+def agent_trace_scope(
+    *,
+    user_id: int | None,
+    session_id: str | None,
+) -> Iterator[tuple[AgentTraceContext, bool]]:
+    """Reuse an active request context or create one for direct loop calls."""
+
+    active = current_trace_context()
+    if active is not None:
+        yield active, False
+        return
+    context = AgentTraceContext(
+        run_id=str(uuid4()),
+        user_id=user_id,
+        session_id=session_id,
+    )
+    token = set_trace_context(context)
+    try:
+        yield context, True
+    finally:
+        reset_trace_context(token)
+
+
+def content_metadata(value: str, *, prefix: str) -> dict[str, Any]:
+    """Return useful correlation data without retaining the supplied content."""
+
+    return {
+        f"{prefix}_characters": len(value),
+        f"{prefix}_sha256": hashlib.sha256(value.encode("utf-8")).hexdigest()[:16],
+    }
 
 
 def _metadata(
@@ -136,11 +161,10 @@ def langchain_config(
     context = current_trace_context()
     if context is None or not langsmith_enabled():
         return None
-
     return {
         "metadata": _metadata(operation, context, extra=extra_metadata),
         "run_name": f"agent-{operation}",
-        "tags": ["agent", "react"],
+        "tags": ["agent", "react", operation],
     }
 
 
@@ -156,32 +180,22 @@ def agent_run_observation(
     context: AgentTraceContext,
     *,
     question: str,
+    streamed: bool = False,
 ) -> Iterator[Any]:
-    if not langsmith_enabled():
-        yield None
-        return
+    """Create the request root without sending raw user content to LangSmith."""
 
-    client = _get_langsmith_client()
-    run_id = _run_id(context.run_id)
-    try:
-        client.create_run(
-            id=run_id,
-            name="agent-run",
-            run_type="chain",
-            inputs={"question": question},
-            project_name=_langsmith_project(),
-            extra={"metadata": _metadata("run", context)},
-            tags=["agent", "react"],
-        )
-    except Exception as exc:  # pragma: no cover - best-effort observability
-        logger.warning("langsmith_run_create_failed: %s", type(exc).__name__)
-        yield None
-        return
-
-    try:
-        yield _LangSmithObservation(run_id, client, _metadata("run", context))
-    finally:
-        _close_run(client, run_id)
+    metadata = _metadata(
+        "run",
+        context,
+        extra={"streamed": streamed, **content_metadata(question, prefix="input")},
+    )
+    with _trace_observation(
+        "agent-run",
+        run_type="chain",
+        metadata=metadata,
+        run_id=_run_id(context.run_id),
+    ) as observation:
+        yield observation
 
 
 @contextmanager
@@ -189,45 +203,62 @@ def agent_span(
     name: str,
     *,
     metadata: dict[str, Any] | None = None,
+    run_type: RunType = "chain",
 ) -> Iterator[Any]:
     context = current_trace_context()
-    if context is None or not langsmith_enabled():
+    if context is None:
         yield None
         return
+    base_metadata = _metadata(name, context, extra=metadata)
+    with _trace_observation(
+        name,
+        run_type=run_type,
+        metadata=base_metadata,
+    ) as observation:
+        yield observation
 
-    client = _get_langsmith_client()
-    run_id = uuid4()
+
+@contextmanager
+def _trace_observation(
+    name: str,
+    *,
+    run_type: RunType,
+    metadata: dict[str, Any],
+    run_id: UUID | None = None,
+) -> Iterator[Any]:
+    if not langsmith_enabled():
+        yield None
+        return
     try:
-        client.create_run(
-            id=run_id,
-            parent_run_id=_run_id(context.run_id),
-            name=name,
-            run_type="chain",
+        manager = trace(
+            name,
+            run_type=run_type,
             inputs={},
             project_name=_langsmith_project(),
-            extra={"metadata": _metadata(name, context, extra=metadata)},
-            tags=["agent", "react"],
+            tags=["agent", "react", name],
+            metadata=metadata,
+            client=_get_langsmith_client(),
+            run_id=run_id,
         )
+        run = manager.__enter__()
     except Exception as exc:  # pragma: no cover - best-effort observability
-        logger.warning("langsmith_span_create_failed: %s", type(exc).__name__)
+        logger.warning("langsmith_trace_failed: %s", type(exc).__name__)
         yield None
         return
 
     try:
-        yield _LangSmithObservation(
-            run_id,
-            client,
-            _metadata(name, context, extra=metadata),
-        )
-    finally:
-        _close_run(client, run_id)
-
-
-def _close_run(client: Client, run_id: UUID) -> None:
-    try:
-        client.update_run(run_id, end_time=datetime.now(UTC))
-    except Exception as exc:  # pragma: no cover - best-effort observability
-        logger.warning("langsmith_run_close_failed: %s", type(exc).__name__)
+        yield _LangSmithObservation(run, metadata)
+    except BaseException:
+        try:
+            manager.__exit__(*sys.exc_info())
+        except Exception as exc:  # pragma: no cover - best-effort observability
+            logger.warning("langsmith_trace_close_failed: %s", type(exc).__name__)
+        raise
+    else:
+        try:
+            manager.__exit__(None, None, None)
+        except Exception as exc:  # pragma: no cover - best-effort observability
+            logger.warning("langsmith_trace_close_failed: %s", type(exc).__name__)
 
 
 def update_observation(
@@ -241,28 +272,28 @@ def update_observation(
 ) -> None:
     if observation is None:
         return
-    kwargs: dict[str, Any] = {}
+    safe_metadata = metadata
     if metadata is not None:
         context = current_trace_context()
-        kwargs["metadata"] = (
+        safe_metadata = (
             _metadata(operation, context, extra=metadata)
             if context is not None
             else metadata
         )
-    if level is not None:
-        kwargs["level"] = level
-    if status_message is not None:
-        kwargs["status_message"] = status_message
-    if output is not None:
-        kwargs["output"] = output
-    if kwargs:
-        observation.update(**kwargs)
+    observation.update(
+        metadata=safe_metadata,
+        level=level,
+        status_message=status_message,
+        output=output,
+    )
 
 
 __all__ = [
     "AgentTraceContext",
     "agent_run_observation",
     "agent_span",
+    "agent_trace_scope",
+    "content_metadata",
     "current_trace_context",
     "langchain_config",
     "langsmith_configured",
