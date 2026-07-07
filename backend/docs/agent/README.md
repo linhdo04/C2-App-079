@@ -73,14 +73,23 @@ Checkpoint tables thuộc official LangGraph saver và được setup tự độ
 ## Tracing
 
 Agent tracing dùng LangSmith khi `LANGSMITH_API_KEY` được cấu hình và
-`LANGSMITH_TRACING=True`. Mỗi agent run tạo một root run `agent-run`;
-LangChain/DeepSeek calls nhận `run_name`, tags và metadata qua RunnableConfig để
-LangSmith giữ model, token usage và generation metadata. Chat routes truyền
-`chat_id` làm `session_id` trong metadata để nhóm multi-turn conversations.
+`LANGSMITH_TRACING=True`. Mỗi request tạo một root run `agent-run`, kể cả khi
+được trả lời bởi deterministic pre-router hoặc intent router. Full LangGraph,
+LangChain/DeepSeek calls và span thủ công dùng chung native parent context để
+nằm trong cùng trace tree. Chat routes truyền `chat_id` làm `session_id` trong
+metadata để nhóm multi-turn conversations.
 
-Cost Management lưu local từng LLM usage event và metric tổng hợp cho mỗi
-agent run (`agent_run_metrics`) theo `run_id`, gồm latency, iterations,
-termination reason, success, streamed flag, tổng token và cost.
+LangSmith client ẩn toàn bộ inputs/outputs ở mọi cấp. Trace chỉ giữ metadata an
+toàn như độ dài/hash input, route, stage, iteration, attempt, latency, outcome
+và error type; không lưu raw prompt, history, tool payload/observation hoặc final
+answer. Trace failure là best-effort và không làm agent request thất bại. Stream
+bị client hủy được đóng với outcome `cancelled` và trace context luôn được reset.
+
+Cost Management lưu local từng LLM usage event và metric tổng hợp cho mỗi full
+LangGraph run (`agent_run_metrics`) theo `run_id`, gồm latency, iterations,
+termination reason, success, streamed flag, tổng token và cost. Fast paths có
+LangSmith trace và structured log nhưng không được thêm vào bảng metric này để
+giữ nguyên semantics của dashboard hiện tại.
 
 Tool execution được bọc bằng span metadata cấp cao (`tool`, `iteration`,
 `attempt`) nhưng không ghi raw tool observation để giảm rủi ro lộ dữ liệu nội bộ.

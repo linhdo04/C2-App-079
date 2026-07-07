@@ -23,6 +23,7 @@ from .tracing import (
     AgentTraceContext,
     agent_run_observation,
     agent_span,
+    current_trace_context,
     reset_trace_context,
     set_trace_context,
     update_observation,
@@ -322,6 +323,15 @@ class Executor:
     ) -> ToolExecutionResult:
         tool = self.registry.get(action.tool)
         if tool is None:
+            with agent_span(
+                "agent-tool-validation",
+                metadata={
+                    "tool": action.tool,
+                    "iteration": iteration,
+                    "outcome": "not_found",
+                },
+            ):
+                pass
             return ToolExecutionResult(
                 observation=f"Tool '{action.tool}' is not available.",
                 succeeded=False,
@@ -330,6 +340,15 @@ class Executor:
         try:
             validated_input = tool.input_model.model_validate(action.input)
         except ValidationError:
+            with agent_span(
+                "agent-tool-validation",
+                metadata={
+                    "tool": tool.name,
+                    "iteration": iteration,
+                    "outcome": "invalid_input",
+                },
+            ):
+                pass
             return ToolExecutionResult(
                 observation=f"Input for tool '{action.tool}' is invalid.",
                 succeeded=False,
@@ -663,13 +682,14 @@ class AgentLoop:
         on_step: StepCallback | None = None,
         on_event: EventCallback | None = None,
     ) -> AgentLoopResult:
-        run_id = str(uuid.uuid4())
-        trace_context = AgentTraceContext(
-            run_id=run_id,
-            user_id=user_id,
-            session_id=session_id,
+        active_context = current_trace_context()
+        trace_context = active_context or AgentTraceContext(
+            run_id=str(uuid.uuid4()), user_id=user_id, session_id=session_id
         )
-        trace_token = set_trace_context(trace_context)
+        run_id = trace_context.run_id
+        trace_token = (
+            set_trace_context(trace_context) if active_context is None else None
+        )
         started_at = time.perf_counter()
 
         try:
@@ -696,7 +716,19 @@ class AgentLoop:
                 user_id=user_id,
             )
 
-            with agent_run_observation(trace_context, question=goal) as observation:
+            observation_manager = (
+                agent_run_observation(trace_context, question=goal)
+                if active_context is None
+                else agent_span(
+                    "agent-runtime",
+                    metadata={
+                        "streamed": False,
+                        "checkpointed": checkpointer is not None,
+                        "checkpoint_durability": self.checkpoint_durability,
+                    },
+                )
+            )
+            with observation_manager as observation:
                 final_state = cast(
                     _AgentGraphState,
                     await graph.ainvoke(
@@ -714,8 +746,8 @@ class AgentLoop:
                 duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
                 if observation is not None:
                     observation.update(
-                        output={"response": result.final_response},
                         metadata={
+                            "response_characters": len(result.final_response),
                             "iterations": result.iterations,
                             "termination_reason": result.termination_reason,
                             "success": result.done,
@@ -756,7 +788,8 @@ class AgentLoop:
                 )
                 return result
         finally:
-            reset_trace_context(trace_token)
+            if trace_token is not None:
+                reset_trace_context(trace_token)
 
     async def stream(
         self,
@@ -768,13 +801,14 @@ class AgentLoop:
         on_step: StepCallback | None = None,
         on_event: EventCallback | None = None,
     ) -> AsyncIterator[AgentLoopStreamEvent]:
-        run_id = str(uuid.uuid4())
-        trace_context = AgentTraceContext(
-            run_id=run_id,
-            user_id=user_id,
-            session_id=session_id,
+        active_context = current_trace_context()
+        trace_context = active_context or AgentTraceContext(
+            run_id=str(uuid.uuid4()), user_id=user_id, session_id=session_id
         )
-        trace_token = set_trace_context(trace_context)
+        run_id = trace_context.run_id
+        trace_token = (
+            set_trace_context(trace_context) if active_context is None else None
+        )
         started_at = time.perf_counter()
         streamed_parts: list[str] = []
         final_state: _AgentGraphState | None = None
@@ -802,7 +836,19 @@ class AgentLoop:
                 session_id=session_id,
                 user_id=user_id,
             )
-            with agent_run_observation(trace_context, question=goal) as observation:
+            observation_manager = (
+                agent_run_observation(trace_context, question=goal, streamed=True)
+                if active_context is None
+                else agent_span(
+                    "agent-runtime",
+                    metadata={
+                        "streamed": True,
+                        "checkpointed": checkpointer is not None,
+                        "checkpoint_durability": self.checkpoint_durability,
+                    },
+                )
+            )
+            with observation_manager as observation:
                 async for chunk in graph.astream(
                     initial_state,
                     config=config,
@@ -843,8 +889,8 @@ class AgentLoop:
                 duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
                 if observation is not None:
                     observation.update(
-                        output={"response": result.final_response},
                         metadata={
+                            "response_characters": len(result.final_response),
                             "iterations": result.iterations,
                             "termination_reason": result.termination_reason,
                             "success": result.done,
@@ -886,7 +932,8 @@ class AgentLoop:
                 )
                 yield {"event": "result", "result": result}
         finally:
-            reset_trace_context(trace_token)
+            if trace_token is not None:
+                reset_trace_context(trace_token)
 
     @staticmethod
     def _message_stream_token(data: Any) -> str:
@@ -911,11 +958,14 @@ class AgentLoop:
         session_id: str | None = None,
         memory: Memory | None = None,
     ) -> AsyncIterator[AgentLoopStreamEvent]:
-        run_id = str(uuid.uuid4())
-        trace_context = AgentTraceContext(
-            run_id=run_id, user_id=user_id, session_id=session_id
+        active_context = current_trace_context()
+        trace_context = active_context or AgentTraceContext(
+            run_id=str(uuid.uuid4()), user_id=user_id, session_id=session_id
         )
-        trace_token = set_trace_context(trace_context)
+        run_id = trace_context.run_id
+        trace_token = (
+            set_trace_context(trace_context) if active_context is None else None
+        )
         try:
             checkpointer = (
                 self.checkpointer_factory()
@@ -943,7 +993,8 @@ class AgentLoop:
                 if projection:
                     yield {"event": "debug", "data": projection}
         finally:
-            reset_trace_context(trace_token)
+            if trace_token is not None:
+                reset_trace_context(trace_token)
 
     @staticmethod
     def _project_debug_event(event: dict[str, Any]) -> dict[str, Any] | None:
@@ -1096,9 +1147,17 @@ class AgentLoop:
                     "action": None,
                 }
 
-            guarded_response = _decision_guard_response(
-                state["safe_goal"], action, memory
-            )
+            with agent_span(
+                "agent-decision-guard",
+                metadata={"iteration": iteration, "tool": action.tool},
+            ) as guard_span:
+                guarded_response = _decision_guard_response(
+                    state["safe_goal"], action, memory
+                )
+                update_observation(
+                    guard_span,
+                    metadata={"guarded": guarded_response is not None},
+                )
             if guarded_response is not None:
                 step = ReActStep(
                     thought=decision.thought,
@@ -1126,6 +1185,12 @@ class AgentLoop:
 
             call_key = f"{action.tool}:{json.dumps(action.input, sort_keys=True)}"
             if call_key in state["calls"]:
+                logger.info(
+                    "agent_no_progress",
+                    run_id=state["run_id"],
+                    iteration=iteration,
+                    tool=action.tool,
+                )
                 return {
                     "iteration": iteration,
                     "termination_reason": "no_progress",
@@ -1201,7 +1266,13 @@ class AgentLoop:
                             continue
                         chunks.append(text)
                     final_response = "".join(chunks)
-                except Exception:
+                except Exception as exc:
+                    logger.warning(
+                        "agent_finalize_failed",
+                        run_id=state["run_id"],
+                        error_type=type(exc).__name__,
+                        partial_response=bool(chunks),
+                    )
                     if chunks:
                         final_response = "".join(chunks)
                     else:
@@ -1211,7 +1282,13 @@ class AgentLoop:
                     final_response = await self.reasoner.finalize(
                         state["safe_goal"], memory
                     )
-                except Exception:
+                except Exception as exc:
+                    logger.warning(
+                        "agent_finalize_failed",
+                        run_id=state["run_id"],
+                        error_type=type(exc).__name__,
+                        partial_response=False,
+                    )
                     final_response = _AGENT_MESSAGES.fallback("finalize_failed")
         if self.guardrails is not None:
             output_decision = self.guardrails.check_output(final_response)
