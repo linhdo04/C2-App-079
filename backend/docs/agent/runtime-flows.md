@@ -320,9 +320,10 @@ termination_reason = max_iterations
 
 ## Tracing và logging
 
-Mỗi run có `run_id`. Khi LangSmith được cấu hình, agent tạo root run
-`agent-run`; LangChain/DeepSeek calls nhận `run_name`, tags và metadata qua
-RunnableConfig để LangSmith tracing ghi nhận model, token usage và generation
-metadata. Tool execution tạo span metadata cấp cao như `tool`, `iteration`,
-`attempt`; raw observation không được ghi vào span metadata để giảm rủi ro lộ dữ
-liệu nội bộ.
+Mỗi facade request có `run_id`. Khi LangSmith được cấu hình, agent tạo root run
+`agent-run` trước pre-router; intent-router, LangGraph, LangChain/DeepSeek và
+tool spans kế thừa cùng parent context. LangSmith client ẩn inputs/outputs toàn
+cục; trace chỉ ghi metadata như route, độ dài/hash, `tool`, `iteration`,
+`attempt`, latency và outcome. Raw prompt, history, tool payload/observation và
+final response không được gửi vào trace. Trace lỗi hoặc stream bị hủy không làm
+thay đổi HTTP/SSE contract và context luôn được dọn dẹp.

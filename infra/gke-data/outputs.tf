@@ -23,7 +23,7 @@ output "node_service_account" {
 }
 
 output "get_credentials_command" {
-  value = "gcloud container clusters get-credentials ${module.gke.name} --region ${local.region} --project ${local.project_id}"
+  value = "gcloud container clusters get-credentials ${module.gke.name} --${var.regional_cluster ? "region" : "zone"} ${module.gke.location} --project ${local.project_id}"
 }
 
 output "postgres_private_ip" {
@@ -42,20 +42,6 @@ output "postgres_user" {
   value = google_sql_user.app.name
 }
 
-output "redis_host" {
-  value = google_redis_instance.redis.host
-}
-
-output "redis_port" {
-  value = google_redis_instance.redis.port
-}
-
-output "redis_auth_string" {
-  description = "Sensitive Redis AUTH value; store it in a secret manager"
-  value       = google_redis_instance.redis.auth_string
-  sensitive   = true
-}
-
 output "artifact_registry_repository" {
   value = google_artifact_registry_repository.app_registry.name
 }
@@ -70,10 +56,6 @@ output "frontend_image_repository" {
 
 output "ingress_ip" {
   value = google_compute_global_address.app_ingress.address
-}
-
-output "jenkins_ingress_ip" {
-  value = google_compute_global_address.jenkins_ingress.address
 }
 
 output "jenkins_agent_service_account" {

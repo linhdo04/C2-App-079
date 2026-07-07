@@ -11,6 +11,7 @@ from typing import Any, Protocol
 import structlog
 from pydantic import BaseModel, Field
 
+from ..tracing import agent_span, current_trace_context, update_observation
 from .input_rails import PatternBlockGuardrail
 from .redaction import CreditCardMaskingGuardrail, EmailRedactionGuardrail
 from .risk import GuardrailRiskPattern, GuardrailRiskScore, GuardrailRiskScorer
@@ -106,15 +107,41 @@ class GuardrailPipeline:
         if not self.enabled:
             return GuardrailDecision(content=content)
 
-        self._log_risk(self.risk_scorer.score(content, context), context)
+        with agent_span(
+            "agent-guardrail",
+            metadata={
+                "stage": context.stage,
+                "tool": context.tool,
+                "input_characters": len(content),
+            },
+        ) as span:
+            risk = self.risk_scorer.score(content, context)
+            self._log_risk(risk, context)
 
-        current = content
-        for rail in self.rails:
-            decision = rail.apply(current, context)
-            if decision.blocked:
-                return decision
-            current = decision.content
-        return GuardrailDecision(content=current)
+            current = content
+            for rail in self.rails:
+                decision = rail.apply(current, context)
+                if decision.blocked:
+                    update_observation(
+                        span,
+                        metadata={
+                            "blocked": True,
+                            "reason": decision.reason,
+                            "risk_score": risk.score,
+                        },
+                    )
+                    return decision
+                current = decision.content
+            update_observation(
+                span,
+                metadata={
+                    "blocked": False,
+                    "redacted": current != content,
+                    "output_characters": len(current),
+                    "risk_score": risk.score,
+                },
+            )
+            return GuardrailDecision(content=current)
 
     def _load_rules(self) -> GuardrailRules:
         return GuardrailRules.model_validate_json(
@@ -184,8 +211,10 @@ class GuardrailPipeline:
     ) -> None:
         if risk.score <= 0:
             return
+        trace_context = current_trace_context()
         logger.info(
             "agent_guardrail_risk_scored",
+            run_id=trace_context.run_id if trace_context is not None else None,
             stage=context.stage,
             tool=context.tool,
             score=risk.score,

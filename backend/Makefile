@@ -28,10 +28,10 @@ help:
 	@echo ""
 
 install:
-	uv sync
+	uv sync --all-extras
 
 setup:
-	uv sync --extra dev && pre-commit install
+	uv sync --all-extras && pre-commit install
 
 run:
 	uv run uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
