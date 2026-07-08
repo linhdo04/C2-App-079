@@ -1,18 +1,20 @@
 # Team 079 — Autonomous Drones
 
-Ứng dụng quản lý drone tự hành, gồm dashboard giám sát, quản lý nhiệm vụ,
-telemetry và AI Agent hỗ trợ vận hành.
+Hệ thống AIoT  drone  tự hành ứng dụng cho nông nghiệp thông minh 
 
 ## Công nghệ
 
 - Backend: FastAPI, SQLModel, PostgreSQL, Redis, LangGraph
 - Frontend: Next.js 16, React 19, TypeScript, Tailwind CSS
 - Infrastructure: Docker Compose và Kubernetes
+- Computer vision: semantic segmentation
+- IoT: HTTPS, BLE
+- path planning : Coverage area 
 
 ## Thành viên
 
 - Đỗ Thiện Lĩnh — Frontend, Backend, Infrastructure & K8s
-- Name — API & Backend
+- Dương Quang Minh — IOT , computer vision, path planning 
 - Name — Frontend & Testing
 
 ## Cấu trúc dự án
