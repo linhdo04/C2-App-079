@@ -1,17 +1,16 @@
-name: CI
+name: CD
 
 on:
-  pull_request:
+  push:
     branches:
       - main
 
 jobs:
-  backend-ci:
+  backend-cd:
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: backend
-
     steps:
       - uses: actions/checkout@v4
 
@@ -25,21 +24,14 @@ jobs:
       - name: Install deps
         run: uv sync --frozen --extra dev
 
-      - name: Lint check
-        run: make lint-check
+      - name: Deploy backend
+        run: echo "Deploy backend"
 
-      - name: Format check
-        run: make format-check
-
-      - name: Type check
-        run: make typecheck
-
-  frontend-ci:
+  frontend-cd:
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: frontend
-
     steps:
       - uses: actions/checkout@v4
 
@@ -56,8 +48,5 @@ jobs:
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
-      - name: Check frontend
-        run: |
-          pnpm lint:check
-          pnpm format:check
-          pnpm build
+      - name: Deploy frontend
+        run: echo "Deploy frontend"
